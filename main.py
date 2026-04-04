@@ -8,8 +8,9 @@ from email.mime.text import MIMEText
 import requests
 
 # ── Flask setup ───────────────────────────────────────────────────────────────
-app = Flask(__name__, static_folder=".")
-CORS(app)
+application = Flask(__name__, static_folder=".")
+app = application          # gunicorn looks for `app` OR `application`
+CORS(application)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
@@ -113,7 +114,6 @@ def scrape_keyword(keyword: str, seen_ids: set) -> list:
 
         installs = details.get("minInstalls") or 0
         score    = details.get("score")
-        # Only new / low-install apps
         if installs > 50_000 and score is not None:
             continue
 
@@ -149,17 +149,19 @@ def scrape_keyword(keyword: str, seen_ids: set) -> list:
 
 # ── Email outreach ────────────────────────────────────────────────────────────
 def build_email_body(lead: dict) -> str:
+    sender_name    = get_cfg("SENDER_NAME", "Your Name")
+    sender_company = get_cfg("SENDER_COMPANY", "Your Company")
     return f"""Hi {lead['developer']} team,
 
 I came across {lead['app_name']} on Google Play and I'm genuinely impressed with what you've built in the {lead['category']} space.
 
-I wanted to reach out personally — I believe there's a real opportunity to help {lead['app_name']} scale faster, whether through user acquisition, monetization, or integrations.
+I wanted to reach out personally — I run a Play Store review recovery service that helps app developers quickly recover from negative review spikes, protect their ratings, and improve their Play Store presence.
 
 Would you be open to a quick 15-minute call this week to see if there's a fit?
 
 Best regards,
-[Your Name]
-[Your Company]
+{sender_name}
+{sender_company}
 
 App: {lead['url']}
 """
@@ -260,11 +262,11 @@ def run_automation(initial_kw: str, target: int):
         upd(running=False, phase="done")
 
 # ── Routes ────────────────────────────────────────────────────────────────────
-@app.route("/")
+@application.route("/")
 def index():
     return send_from_directory(".", "dashboard.html")
 
-@app.route("/api/start", methods=["POST"])
+@application.route("/api/start", methods=["POST"])
 def api_start():
     data    = request.get_json(silent=True) or {}
     keyword = (data.get("keyword") or "").strip()
@@ -275,30 +277,31 @@ def api_start():
         if state["running"]:
             return jsonify({"error": "Already running"}), 409
 
-    # Accept config from dashboard body OR fall back to env vars
     global run_cfg
     run_cfg = {
-        "GROQ_API_KEY":        data.get("groq_key")    or os.environ.get("GROQ_API_KEY", ""),
-        "GMAIL_USER":          data.get("gmail")        or os.environ.get("GMAIL_USER", ""),
-        "GMAIL_APP_PASSWORD":  data.get("gmail_pass")  or os.environ.get("GMAIL_APP_PASSWORD", ""),
-        "APPS_SCRIPT_WEB_URL": data.get("sheet_url")   or os.environ.get("APPS_SCRIPT_WEB_URL", ""),
+        "GROQ_API_KEY":        data.get("groq_key")       or os.environ.get("GROQ_API_KEY", ""),
+        "GMAIL_USER":          data.get("gmail")           or os.environ.get("GMAIL_USER", ""),
+        "GMAIL_APP_PASSWORD":  data.get("gmail_pass")      or os.environ.get("GMAIL_APP_PASSWORD", ""),
+        "APPS_SCRIPT_WEB_URL": data.get("sheet_url")       or os.environ.get("APPS_SCRIPT_WEB_URL", ""),
+        "SENDER_NAME":         data.get("sender_name")     or os.environ.get("SENDER_NAME", ""),
+        "SENDER_COMPANY":      data.get("sender_company")  or os.environ.get("SENDER_COMPANY", ""),
     }
     target = int(data.get("target") or os.environ.get("TARGET_LEADS", 300))
 
     threading.Thread(target=run_automation, args=(keyword, target), daemon=True).start()
     return jsonify({"ok": True, "keyword": keyword})
 
-@app.route("/api/stop", methods=["POST"])
+@application.route("/api/stop", methods=["POST"])
 def api_stop():
     stop_event.set()
     push_log("🛑 Stop requested.")
     return jsonify({"ok": True})
 
-@app.route("/api/status")
+@application.route("/api/status")
 def api_status():
     with state_lock:
         return jsonify(dict(state))
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    application.run(host="0.0.0.0", port=port, debug=False)
