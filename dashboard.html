@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>PlayLead Engine — Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
+<style>
+:root{
+  --bg:#050810;--bg2:#080c18;--card:#0c1120;--card2:#0f1628;
+  --border:#1a2240;--border2:#243060;
+  --blue:#2563eb;--blue2:#3b82f6;--blue3:#60a5fa;
+  --cyan:#06b6d4;--green:#10b981;--red:#ef4444;--amber:#f59e0b;
+  --text:#f1f5f9;--text2:#94a3b8;--text3:#475569;
+  --mono:'DM Mono',monospace;--display:'Outfit',sans-serif;
+  --radius:10px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html{scroll-behavior:smooth;}
+body{background:var(--bg);color:var(--text);font-family:var(--display);min-height:100vh;overflow-x:hidden;}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,.01) 2px,rgba(255,255,255,.01) 4px);pointer-events:none;z-index:9999;}
+
+/* SIDEBAR */
+.sidebar{position:fixed;left:0;top:0;bottom:0;width:220px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;z-index:100;}
+.sidebar-logo{padding:24px 20px 20px;border-bottom:1px solid var(--border);}
+.logo-mark{font-family:var(--display);font-size:19px;font-weight:800;letter-spacing:-.3px;}
+.logo-mark span{color:var(--blue2);}
+.logo-sub{font-size:10px;color:var(--text3);letter-spacing:1.5px;text-transform:uppercase;margin-top:3px;}
+.nav{padding:16px 10px;flex:1;}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:7px;cursor:pointer;font-size:13px;font-weight:500;color:var(--text2);transition:all .15s;margin-bottom:2px;}
+.nav-item:hover{background:#131c35;color:var(--text);}
+.nav-item.active{background:linear-gradient(135deg,#1a2f6b,#1e3a8a);color:var(--blue3);font-weight:600;}
+.nav-item .icon{font-size:15px;width:20px;text-align:center;}
+.nav-sep{height:1px;background:var(--border);margin:10px 4px;}
+.sidebar-bottom{padding:16px;border-top:1px solid var(--border);}
+.status-pill{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--card);border-radius:6px;font-size:12px;}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--text3);flex-shrink:0;}
+.dot.live{background:var(--green);box-shadow:0 0 8px var(--green);animation:blink 1.4s ease-in-out infinite;}
+.dot.done-dot{background:var(--green);}
+.dot.err{background:var(--red);}
+@keyframes blink{0%,100%{opacity:1;}50%{opacity:.25;}}
+
+/* MAIN */
+.main{margin-left:220px;min-height:100vh;padding:28px 32px;}
+.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;}
+.page-title{font-size:22px;font-weight:700;letter-spacing:-.3px;}
+.page-title .hi{color:var(--blue2);}
+.time-badge{font-family:var(--mono);font-size:12px;color:var(--text3);background:var(--card);padding:6px 14px;border-radius:6px;border:1px solid var(--border);}
+
+/* SECTION */
+.section{display:none;}
+.section.active{display:block;}
+
+/* CARD */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;position:relative;overflow:hidden;}
+.card-head{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--text3);margin-bottom:16px;display:flex;align-items:center;gap:10px;}
+.card-head::after{content:'';flex:1;height:1px;background:var(--border);}
+
+/* STATS */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:14px;margin-bottom:20px;}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;}
+.stat-card::before{content:'';position:absolute;inset:0;border-radius:var(--radius);background:linear-gradient(135deg,rgba(37,99,235,.05),transparent);pointer-events:none;}
+.stat-label{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);margin-bottom:8px;}
+.stat-val{font-size:34px;font-weight:800;letter-spacing:-1.5px;line-height:1;}
+.stat-sub{font-size:11px;color:var(--text3);margin-top:6px;font-family:var(--mono);}
+.c-blue .stat-val{color:var(--blue3);}
+.c-green .stat-val{color:var(--green);}
+.c-cyan .stat-val{color:var(--cyan);}
+.c-amber .stat-val{color:var(--amber);}
+
+/* GRID */
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;}
+
+/* PROGRESS */
+.prog-row{display:flex;align-items:center;gap:12px;margin-bottom:12px;}
+.prog-lbl{font-size:12px;color:var(--text2);min-width:130px;}
+.prog-track{flex:1;height:7px;background:#0a102a;border-radius:99px;overflow:hidden;}
+.prog-fill{height:100%;border-radius:99px;transition:width .6s cubic-bezier(.4,0,.2,1);}
+.pf-blue{background:linear-gradient(90deg,var(--blue),var(--blue2));}
+.pf-green{background:linear-gradient(90deg,#059669,var(--green));}
+.pf-cyan{background:linear-gradient(90deg,#0891b2,var(--cyan));}
+.pf-amber{background:linear-gradient(90deg,#d97706,var(--amber));}
+.prog-pct{font-family:var(--mono);font-size:11px;color:var(--text3);min-width:38px;text-align:right;}
+
+/* ACTIVITY FEED */
+.act-feed{max-height:300px;overflow-y:auto;}
+.act-feed::-webkit-scrollbar{width:3px;}
+.act-feed::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px;}
+.act-item{display:flex;gap:10px;padding:7px 8px;border-radius:5px;font-size:12px;line-height:1.5;}
+.act-item:hover{background:var(--card2);}
+.act-time{font-family:var(--mono);color:var(--text3);flex-shrink:0;font-size:11px;padding-top:1px;}
+.act-ico{flex-shrink:0;font-size:13px;}
+.act-msg{color:var(--text2);flex:1;}
+
+/* PIPELINE */
+.pipeline{display:flex;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px;}
+.pipe-step{flex:1;padding:13px 8px;text-align:center;font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--text3);border-right:1px solid var(--border);transition:all .3s;position:relative;}
+.pipe-step:last-child{border-right:none;}
+.pipe-ico{font-size:17px;display:block;margin-bottom:4px;}
+.pipe-step.p-active{background:#0a1835;color:var(--blue3);}
+.pipe-step.p-active::after{content:'';position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--blue2);}
+.pipe-step.p-done{background:#071a0f;color:var(--green);}
+.pipe-step.p-err{background:#1a0808;color:var(--red);}
+
+/* TABLE */
+.table-wrap{overflow-x:auto;}
+table{width:100%;border-collapse:collapse;font-size:12.5px;}
+thead th{padding:10px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--text3);background:#07091a;border-bottom:1px solid var(--border);white-space:nowrap;}
+tbody td{padding:10px 14px;border-bottom:1px solid #0d1120;vertical-align:middle;white-space:nowrap;}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr:hover td{background:#0d1525;}
+.bdg{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;letter-spacing:.5px;padding:3px 9px;border-radius:4px;}
+.bdg-sent{background:#0c2a1e;color:var(--green);border:1px solid #145c39;}
+.bdg-pend{background:#1a1505;color:var(--amber);border:1px solid #4a3c08;}
+.bdg-cat{background:#0a1835;color:var(--blue3);border:1px solid #1a3a7a;}
+.email-a{color:var(--blue3);text-decoration:none;font-family:var(--mono);font-size:11px;}
+.email-a:hover{text-decoration:underline;}
+.ext-a{color:var(--text3);font-size:15px;text-decoration:none;transition:color .15s;}
+.ext-a:hover{color:var(--blue3);}
+
+/* FUNNEL */
+.funnel{display:flex;flex-direction:column;gap:10px;padding:4px 0;}
+.fn-step{display:flex;align-items:center;gap:12px;}
+.fn-lbl{font-size:11px;color:var(--text2);min-width:100px;text-align:right;}
+.fn-bar-wrap{flex:1;height:30px;background:#0a102a;border-radius:6px;overflow:hidden;}
+.fn-bar{height:100%;border-radius:6px;display:flex;align-items:center;padding:0 10px;font-size:12px;font-weight:700;color:#fff;transition:width .8s cubic-bezier(.4,0,.2,1);min-width:30px;}
+.fn-cnt{font-family:var(--mono);font-size:12px;color:var(--text3);min-width:36px;}
+
+/* SETUP INPUTS */
+.form-group{display:flex;flex-direction:column;gap:6px;margin-bottom:14px;}
+.form-label{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);}
+.form-hint{font-size:11px;color:var(--text3);line-height:1.6;}
+.form-input{background:#07091a;border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12.5px;padding:11px 14px;border-radius:7px;outline:none;transition:border .2s,box-shadow .2s;width:100%;}
+.form-input:focus{border-color:var(--blue2);box-shadow:0 0 0 3px rgba(59,130,246,.12);}
+.form-input::placeholder{color:var(--text3);}
+
+/* BUTTONS */
+.btn-primary{background:linear-gradient(135deg,#1d4ed8,var(--blue2));color:#fff;border:none;padding:11px 26px;border-radius:7px;font-family:var(--display);font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.3px;transition:all .18s;}
+.btn-primary:hover{filter:brightness(1.12);transform:translateY(-1px);}
+.btn-primary:active{transform:translateY(0);}
+.btn-primary:disabled{opacity:.4;cursor:not-allowed;transform:none;filter:none;}
+.btn-danger{background:transparent;color:var(--red);border:1.5px solid var(--red);padding:11px 22px;border-radius:7px;font-family:var(--display);font-size:13px;font-weight:700;cursor:pointer;transition:all .18s;display:none;}
+.btn-danger.show{display:inline-block;}
+.btn-danger:hover{background:var(--red);color:#fff;}
+.btn-ghost{background:var(--card2);border:1px solid var(--border);color:var(--text2);padding:7px 16px;border-radius:6px;font-size:11px;cursor:pointer;font-family:var(--mono);transition:all .15s;}
+.btn-ghost:hover{color:var(--text);border-color:var(--border2);}
+
+/* RUNNER CARD */
+.runner-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:22px;margin-bottom:18px;}
+.runner-row{display:flex;gap:12px;align-items:stretch;}
+.kw-input{flex:1;background:#07091a;border:1px solid var(--border);color:var(--text);font-family:var(--display);font-size:15px;font-weight:500;padding:13px 18px;border-radius:8px;outline:none;transition:border .2s,box-shadow .2s;}
+.kw-input:focus{border-color:var(--blue2);box-shadow:0 0 0 3px rgba(59,130,246,.12);}
+.kw-input::placeholder{color:var(--text3);}
+
+/* KEYWORD CHIPS */
+.kw-chips{display:flex;flex-wrap:wrap;gap:7px;padding:2px 0;}
+.kw-chip{display:flex;align-items:center;gap:5px;background:#0a1435;border:1px solid var(--border2);border-radius:5px;padding:4px 10px;font-size:11px;color:var(--blue3);}
+.kw-idx{font-family:var(--mono);color:var(--text3);font-size:10px;}
+
+/* APPS SCRIPT HELPER */
+.as-box{background:#07091a;border:1px solid var(--border);border-radius:8px;padding:16px;margin-top:8px;}
+.as-box h4{font-size:11px;font-weight:700;color:var(--blue3);margin-bottom:10px;letter-spacing:.5px;text-transform:uppercase;}
+.code-block{background:#03060f;border:1px solid var(--border);border-radius:6px;padding:12px;font-family:var(--mono);font-size:11px;color:#7dd3fc;line-height:1.7;overflow-x:auto;white-space:pre;}
+.env-block{background:#03060f;border:1px solid var(--border);border-radius:6px;padding:12px;font-family:var(--mono);font-size:11.5px;color:#86efac;line-height:2;white-space:pre;}
+.saved-msg{display:none;font-size:12px;color:var(--green);align-items:center;gap:6px;}
+.saved-msg.show{display:flex;}
+
+/* CONFIG WARNING */
+.cfg-warn{background:#1a0e06;border:1px solid #5a3a08;border-radius:8px;padding:12px 16px;font-size:12px;color:var(--amber);margin-bottom:18px;display:none;align-items:center;gap:10px;}
+.cfg-warn.show{display:flex;}
+
+/* EMPTY */
+.empty-st{text-align:center;padding:40px 20px;color:var(--text3);font-size:13px;line-height:2;}
+.empty-ico{font-size:28px;display:block;margin-bottom:8px;}
+
+/* SCROLLBAR */
+::-webkit-scrollbar{width:5px;height:5px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px;}
+
+/* SHEET LINK */
+.sheet-link-row{display:flex;align-items:center;gap:10px;margin-top:8px;}
+.sheet-link-btn{display:inline-flex;align-items:center;gap:6px;background:#0a1835;border:1px solid var(--border2);color:var(--blue3);padding:7px 14px;border-radius:6px;font-size:12px;font-weight:600;text-decoration:none;transition:all .15s;}
+.sheet-link-btn:hover{background:#0f2050;filter:brightness(1.1);}
+
+@media(max-width:900px){
+  .sidebar{display:none;}.main{margin-left:0;}
+  .grid-2,.grid-3{grid-template-columns:1fr;}
+  .stats-grid{grid-template-columns:repeat(2,1fr);}
+}
+</style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-mark">Play<span>Lead</span></div>
+    <div class="logo-sub">Automation Engine</div>
+  </div>
+  <nav class="nav">
+    <div class="nav-item active" onclick="showSec('automation',this)"><span class="icon">⚡</span>Automation</div>
+    <div class="nav-item" onclick="showSec('analytics',this)"><span class="icon">📊</span>Analytics</div>
+    <div class="nav-item" onclick="showSec('database',this)"><span class="icon">🗄️</span>Database</div>
+    <div class="nav-sep"></div>
+    <div class="nav-item" onclick="showSec('setup',this)"><span class="icon">⚙️</span>Setup & Config</div>
+  </nav>
+  <div class="sidebar-bottom">
+    <div class="status-pill">
+      <div class="dot" id="sbDot"></div>
+      <span id="sbStatus" style="color:var(--text2);">Idle</span>
+    </div>
+  </div>
+</aside>
+
+<!-- MAIN -->
+<main class="main">
+  <div class="topbar">
+    <div class="page-title" id="pgTitle">⚡ <span class="hi">Automation</span></div>
+    <div class="time-badge" id="clk">--:--:--</div>
+  </div>
+  <div class="cfg-warn" id="cfgWarn">⚠️ &nbsp;Setup incomplete — go to <strong>Setup &amp; Config</strong> and save your credentials first.</div>
+
+  <!-- ══════════ AUTOMATION ══════════ -->
+  <section class="section active" id="sec-automation">
+    <div class="runner-card">
+      <div class="card-head">Launch Automation</div>
+      <div class="runner-row">
+        <input class="kw-input" id="kwInput" type="text" placeholder="Keyword — e.g. budget tracker, meditation app, fitness log …"/>
+        <button class="btn-primary" id="btnStart" onclick="startAuto()">▶ Start</button>
+        <button class="btn-danger" id="btnStop" onclick="stopAuto()">⏹ Stop</button>
+      </div>
+    </div>
+
+    <div class="pipeline">
+      <div class="pipe-step" id="pp-scrape"><span class="pipe-ico">🔍</span>Scraping</div>
+      <div class="pipe-step" id="pp-ai"><span class="pipe-ico">🤖</span>AI Keywords</div>
+      <div class="pipe-step" id="pp-leads"><span class="pipe-ico">📋</span>Leads Ready</div>
+      <div class="pipe-step" id="pp-email"><span class="pipe-ico">📧</span>Emailing</div>
+      <div class="pipe-step" id="pp-done"><span class="pipe-ico">✅</span>Complete</div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card c-blue"><div class="stat-label">Leads Found</div><div class="stat-val" id="stLeads">0</div><div class="stat-sub">Target: <span id="tgtNum">300</span></div></div>
+      <div class="stat-card c-green"><div class="stat-label">Emails Sent</div><div class="stat-val" id="stEmails">0</div><div class="stat-sub">of <span id="tgtLeadsForEmail">0</span> leads</div></div>
+      <div class="stat-card c-cyan"><div class="stat-label">Keywords Used</div><div class="stat-val" id="stKws">0</div><div class="stat-sub">incl. AI-generated</div></div>
+      <div class="stat-card c-amber"><div class="stat-label">Delivery Rate</div><div class="stat-val" id="stRate">—</div><div class="stat-sub">email success %</div></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head">Progress</div>
+        <div class="prog-row"><div class="prog-lbl">Lead collection</div><div class="prog-track"><div class="prog-fill pf-blue" id="pfLeads" style="width:0%"></div></div><div class="prog-pct" id="ppLeads">0%</div></div>
+        <div class="prog-row"><div class="prog-lbl">Email outreach</div><div class="prog-track"><div class="prog-fill pf-green" id="pfEmail" style="width:0%"></div></div><div class="prog-pct" id="ppEmail">0%</div></div>
+        <div class="prog-row"><div class="prog-lbl">AI keywords used</div><div class="prog-track"><div class="prog-fill pf-cyan" id="pfAI" style="width:0%"></div></div><div class="prog-pct" id="ppAI">0</div></div>
+        <div style="margin-top:16px;">
+          <div style="font-size:10px;letter-spacing:1.5px;color:var(--text3);text-transform:uppercase;margin-bottom:8px;">Keywords in queue</div>
+          <div class="kw-chips" id="kwChips"><span style="color:var(--text3);font-size:12px;">None yet</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">Live Activity</div>
+        <div class="act-feed" id="actFeed"><div class="empty-st"><span class="empty-ico">📡</span>Waiting for automation to start…</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ ANALYTICS ══════════ -->
+  <section class="section" id="sec-analytics">
+    <div class="stats-grid">
+      <div class="stat-card c-blue"><div class="stat-label">Total Leads</div><div class="stat-val" id="an-l">0</div><div class="stat-sub">apps collected</div></div>
+      <div class="stat-card c-green"><div class="stat-label">Emails Sent</div><div class="stat-val" id="an-e">0</div><div class="stat-sub">outreach complete</div></div>
+      <div class="stat-card c-cyan"><div class="stat-label">Categories</div><div class="stat-val" id="an-c">—</div><div class="stat-sub">unique genres</div></div>
+      <div class="stat-card c-amber"><div class="stat-label">Avg Rating</div><div class="stat-val" id="an-s">—</div><div class="stat-sub">Play Store score</div></div>
+    </div>
+    <div class="grid-2" style="margin-bottom:14px;">
+      <div class="card">
+        <div class="card-head">Conversion Funnel</div>
+        <div class="funnel">
+          <div class="fn-step"><div class="fn-lbl">Apps Scraped</div><div class="fn-bar-wrap"><div class="fn-bar" id="fn1" style="width:100%;background:linear-gradient(90deg,#1d4ed8,#3b82f6)">0</div></div><div class="fn-cnt" id="fn1c">0</div></div>
+          <div class="fn-step"><div class="fn-lbl">Has Email</div><div class="fn-bar-wrap"><div class="fn-bar" id="fn2" style="width:0%;background:linear-gradient(90deg,#0891b2,#06b6d4)">0</div></div><div class="fn-cnt" id="fn2c">0</div></div>
+          <div class="fn-step"><div class="fn-lbl">Email Sent</div><div class="fn-bar-wrap"><div class="fn-bar" id="fn3" style="width:0%;background:linear-gradient(90deg,#059669,#10b981)">0</div></div><div class="fn-cnt" id="fn3c">0</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">Top Categories</div>
+        <div id="catBreak"><div class="empty-st" style="padding:20px;font-size:12px;">No data yet</div></div>
+      </div>
+    </div>
+    <div class="grid-3">
+      <div class="card">
+        <div class="card-head">Install Distribution</div>
+        <div id="installBreak"><div class="empty-st" style="padding:20px;font-size:12px;">—</div></div>
+      </div>
+      <div class="card">
+        <div class="card-head">Keyword Performance</div>
+        <div id="kwPerf"><div class="empty-st" style="padding:20px;font-size:12px;">—</div></div>
+      </div>
+      <div class="card">
+        <div class="card-head">Session Summary</div>
+        <div style="font-size:12px;color:var(--text3);line-height:2.4;padding:4px 0;">
+          Start time: <span id="ss-start" style="color:var(--text2)">—</span><br>
+          Duration: <span id="ss-dur" style="color:var(--text2)">—</span><br>
+          Current phase: <span id="ss-phase" style="color:var(--blue3)">—</span><br>
+          AI calls made: <span id="ss-ai" style="color:var(--cyan)">0</span><br>
+          Sheet connected: <span id="ss-sheet" style="color:var(--green)">—</span><br>
+          Status: <span id="ss-st" style="color:var(--text2)">Idle</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ DATABASE ══════════ -->
+  <section class="section" id="sec-database">
+    <div class="card">
+      <div class="card-head" style="justify-content:space-between;">
+        <span>All Leads &nbsp;<span id="dbCnt" style="color:var(--blue3);font-size:15px;letter-spacing:0;font-weight:800">0</span></span>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span id="sheetLinkWrap"></span>
+          <button class="btn-ghost" onclick="exportCSV()">⬇ Export CSV</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>#</th><th>App Name</th><th>Developer</th><th>Email</th>
+            <th>Category</th><th>Installs</th><th>Score</th>
+            <th>Keyword</th><th>Status</th><th>Link</th>
+          </tr></thead>
+          <tbody id="dbBody"><tr><td colspan="10"><div class="empty-st"><span class="empty-ico">🗄️</span>No leads yet. Start automation to populate.</div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ SETUP ══════════ -->
+  <section class="section" id="sec-setup">
+    <div class="grid-2" style="margin-bottom:16px;">
+      <!-- credentials -->
+      <div class="card">
+        <div class="card-head">API Credentials</div>
+        <div class="form-group">
+          <label class="form-label">Groq API Key</label>
+          <input class="form-input" id="cfg-groq" type="password" placeholder="gsk_…"/>
+          <div class="form-hint">From <strong style="color:var(--blue3)">console.groq.com</strong> — free tier available</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Gmail Address</label>
+          <input class="form-input" id="cfg-gmail" type="email" placeholder="yourname@gmail.com"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Gmail App Password</label>
+          <input class="form-input" id="cfg-gmailpass" type="password" placeholder="xxxx xxxx xxxx xxxx"/>
+          <div class="form-hint">Google Account → Security → 2-Step Verification → App Passwords</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Target Leads</label>
+          <input class="form-input" id="cfg-target" type="number" placeholder="300" value="300" min="10" max="2000"/>
+        </div>
+      </div>
+
+      <!-- Google Sheet -->
+      <div class="card">
+        <div class="card-head">Google Sheet Database</div>
+        <div class="form-group">
+          <label class="form-label">Google Sheet URL</label>
+          <input class="form-input" id="cfg-sheeturl" type="url" placeholder="https://docs.google.com/spreadsheets/d/…"/>
+          <div class="form-hint">Open your Google Sheet → copy the URL from the browser address bar</div>
+          <div class="sheet-link-row" id="sheetLinkRowSetup"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Apps Script Web App URL</label>
+          <input class="form-input" id="cfg-appsscript" type="url" placeholder="https://script.google.com/macros/s/…/exec"/>
+          <div class="form-hint">This receives lead data from the backend and writes it to your Sheet automatically</div>
+        </div>
+        <!-- Apps Script guide -->
+        <div class="as-box">
+          <h4>📋 Apps Script Setup (one time)</h4>
+          <div style="font-size:11px;color:var(--text3);line-height:1.9;margin-bottom:10px;">
+            1. Open your Google Sheet<br>
+            2. <strong style="color:var(--text2)">Extensions → Apps Script</strong><br>
+            3. Delete all existing code, paste the code below → Save (Ctrl+S)<br>
+            4. <strong style="color:var(--text2)">Deploy → New Deployment → Web App</strong><br>
+            5. Execute as: <strong style="color:var(--text2)">Me</strong> &nbsp;|&nbsp; Who has access: <strong style="color:var(--text2)">Anyone</strong><br>
+            6. Click Deploy → Copy the Web App URL → paste above
+          </div>
+          <div class="code-block" id="asCode">function doPost(e) {
+  try {
+    var data = JSON.parse(e.postData.contents);
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Leads") || ss.getActiveSheet();
+    if (sheet.getLastRow() === 0) {
+      sheet.appendRow([
+        "App Name","Developer","Email","Category",
+        "Installs","Score","Description","URL",
+        "Icon","Keyword","Scraped At","Email Sent"
+      ]);
+    }
+    var r = data.row;
+    sheet.appendRow([
+      r.app_name, r.developer, r.email, r.category,
+      r.installs,  r.score,    r.description, r.url,
+      r.icon,      r.keyword,  r.scraped_at,  r.email_sent
+    ]);
+    return ContentService
+      .createTextOutput(JSON.stringify({status:"ok"}))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch(err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({status:"error",msg:err.toString()}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}</div>
+          <button class="btn-ghost" style="margin-top:10px;" onclick="copyCode('asCode')">📋 Copy Apps Script Code</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ENV helper -->
+    <div class="card" style="margin-bottom:18px;">
+      <div class="card-head">Render Environment Variables</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Copy and paste these into your Render service → Environment section:</div>
+      <div class="env-block" id="envPrev">GROQ_API_KEY=…
+GMAIL_USER=…
+GMAIL_APP_PASSWORD=…
+APPS_SCRIPT_WEB_URL=…
+TARGET_LEADS=300</div>
+      <button class="btn-ghost" style="margin-top:10px;" onclick="copyCode('envPrev')">📋 Copy ENV Block</button>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:16px;">
+      <button class="btn-primary" onclick="saveConfig()">💾 Save Configuration</button>
+      <div class="saved-msg" id="savedMsg">✅ Saved successfully!</div>
+    </div>
+  </section>
+</main>
+
+<script>
+// ════ CONFIG ════
+const CFG_KEY = 'playlead_v2';
+let cfg = {};
+
+function loadCfg(){
+  try{ cfg = JSON.parse(localStorage.getItem(CFG_KEY)||'{}'); }catch(e){ cfg={}; }
+  setVal('cfg-groq',cfg.groq||'');
+  setVal('cfg-gmail',cfg.gmail||'');
+  setVal('cfg-gmailpass',cfg.gmailpass||'');
+  setVal('cfg-target',cfg.target||300);
+  setVal('cfg-sheeturl',cfg.sheeturl||'');
+  setVal('cfg-appsscript',cfg.appsscript||'');
+  refreshDerived();
+}
+function saveConfig(){
+  cfg={
+    groq:       getVal('cfg-groq'),
+    gmail:      getVal('cfg-gmail'),
+    gmailpass:  getVal('cfg-gmailpass'),
+    target:     parseInt(getVal('cfg-target'))||300,
+    sheeturl:   getVal('cfg-sheeturl'),
+    appsscript: getVal('cfg-appsscript'),
+  };
+  localStorage.setItem(CFG_KEY,JSON.stringify(cfg));
+  const m=document.getElementById('savedMsg');
+  m.classList.add('show');
+  setTimeout(()=>m.classList.remove('show'),3000);
+  refreshDerived();
+  checkWarn();
+}
+function refreshDerived(){
+  document.getElementById('tgtNum').textContent = cfg.target||300;
+  document.getElementById('envPrev').textContent =
+    `GROQ_API_KEY=${cfg.groq||'…'}\nGMAIL_USER=${cfg.gmail||'…'}\nGMAIL_APP_PASSWORD=${cfg.gmailpass||'…'}\nAPPS_SCRIPT_WEB_URL=${cfg.appsscript||'…'}\nTARGET_LEADS=${cfg.target||300}`;
+  // sheet link
+  const url = cfg.sheeturl||'';
+  const wrap = document.getElementById('sheetLinkRowSetup');
+  const dbWrap = document.getElementById('sheetLinkWrap');
+  const linkHtml = url ? `<a class="sheet-link-btn" href="${esc(url)}" target="_blank">📊 Open Google Sheet ↗</a>` : '';
+  if(wrap) wrap.innerHTML = linkHtml;
+  if(dbWrap) dbWrap.innerHTML = linkHtml;
+  document.getElementById('ss-sheet').textContent = cfg.appsscript?'Yes ✓':'Not set';
+}
+function checkWarn(){
+  const bad = !cfg.groq||!cfg.gmail||!cfg.gmailpass||!cfg.appsscript;
+  document.getElementById('cfgWarn').classList.toggle('show',bad);
+}
+function getVal(id){ return document.getElementById(id).value.trim(); }
+function setVal(id,v){ document.getElementById(id).value=v; }
+
+// ════ NAV ════
+const pgTitles={automation:'⚡ <span class="hi">Automation</span>',analytics:'📊 <span class="hi">Analytics</span>',database:'🗄️ <span class="hi">Database</span>',setup:'⚙️ <span class="hi">Setup & Config</span>'};
+function showSec(name,el){
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('sec-'+name).classList.add('active');
+  el.classList.add('active');
+  document.getElementById('pgTitle').innerHTML=pgTitles[name];
+  if(name==='analytics') renderAnalytics();
+}
+
+// ════ AUTOMATION ════
+let pollTmr=null, lastLogLen=0, startTime=null, allLeads=[], aiCalls=0;
+
+async function startAuto(){
+  const kw = document.getElementById('kwInput').value.trim();
+  if(!kw){alert('Enter a keyword first!');return;}
+  checkWarn();
+  try{
+    const body={keyword:kw,groq_key:cfg.groq,gmail:cfg.gmail,gmail_pass:cfg.gmailpass,sheet_url:cfg.appsscript,target:cfg.target||300};
+    const r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(!r.ok){alert(d.error||'Error starting');return;}
+    startTime=new Date(); aiCalls=0;
+    document.getElementById('btnStart').disabled=true;
+    document.getElementById('btnStop').classList.add('show');
+    startPoll();
+  }catch(e){alert('Cannot reach server: '+e.message);}
+}
+async function stopAuto(){
+  await fetch('/api/stop',{method:'POST'}).catch(()=>{});
+}
+function startPoll(){
+  if(pollTmr) clearInterval(pollTmr);
+  pollTmr=setInterval(fetchSt,2000);
+  fetchSt();
+}
+async function fetchSt(){
+  try{const r=await fetch('/api/status');const d=await r.json();renderSt(d);}catch(e){}
+}
+
+function renderSt(d){
+  const running=d.running, phase=d.phase||'idle';
+  const leads=d.leads_found||0, emails=d.emails_sent||0;
+  const target=cfg.target||300;
+  const kws=d.keywords_used||[];
+  allLeads=d.leads||[];
+
+  // sidebar
+  const dot=document.getElementById('sbDot'), sl=document.getElementById('sbStatus');
+  if(running){dot.className='dot live';sl.textContent='Running';}
+  else if(phase==='done'){dot.className='dot done-dot';sl.textContent='Done ✓';}
+  else if(phase==='stopped'){dot.className='dot err';sl.textContent='Stopped';}
+  else{dot.className='dot';sl.textContent='Idle';}
+
+  // buttons
+  document.getElementById('btnStart').disabled=running;
+  document.getElementById('btnStop').classList.toggle('show',running);
+
+  // stats
+  setText('stLeads',leads);
+  setText('stEmails',emails);
+  setText('stKws',kws.length);
+  setText('tgtLeadsForEmail',leads);
+  document.getElementById('stRate').textContent = leads>0?Math.round((emails/leads)*100)+'%':'—';
+
+  // progress
+  const lp=Math.min(100,Math.round((leads/target)*100));
+  const ep=leads>0?Math.min(100,Math.round((emails/leads)*100)):0;
+  const aiExtra=Math.max(0,kws.length-1)*5; aiCalls=aiExtra;
+  const ap=Math.min(100,Math.round((kws.length-1)/4*100));
+  setBar('pfLeads','ppLeads',lp,lp+'%');
+  setBar('pfEmail','ppEmail',ep,ep+'%');
+  setBar('pfAI','ppAI',ap,aiExtra+' kws');
+
+  // pipeline
+  renderPipeline(phase,running);
+
+  // keyword chips
+  const cc=document.getElementById('kwChips');
+  cc.innerHTML=kws.length?kws.map((k,i)=>`<div class="kw-chip"><span class="kw-idx">#${i+1}</span>${esc(k)}</div>`).join(''):'<span style="color:var(--text3);font-size:12px;">None yet</span>';
+
+  // activity feed
+  const logs=d.logs||[];
+  if(logs.length!==lastLogLen){lastLogLen=logs.length;renderFeed(logs);}
+
+  // analytics live sync
+  setText('an-l',leads);
+  setText('an-e',emails);
+  const cats=[...new Set(allLeads.map(l=>l.category).filter(Boolean))];
+  document.getElementById('an-c').textContent=cats.length||'—';
+  const sc=allLeads.map(l=>l.score).filter(Boolean);
+  document.getElementById('an-s').textContent=sc.length?(sc.reduce((a,b)=>a+b,0)/sc.length).toFixed(1):'—';
+
+  // session summary
+  if(startTime){
+    document.getElementById('ss-start').textContent=startTime.toLocaleTimeString();
+    document.getElementById('ss-dur').textContent=fmtDur(Math.floor((Date.now()-startTime)/1000));
+  }
+  document.getElementById('ss-phase').textContent=phase;
+  document.getElementById('ss-ai').textContent=aiCalls;
+  document.getElementById('ss-st').textContent=running?'Running':phase==='done'?'Done ✓':'Stopped';
+
+  // database
+  renderDB(allLeads);
+
+  if(!running&&(phase==='done'||phase==='stopped'||phase==='idle')){
+    document.getElementById('btnStart').disabled=false;
+    document.getElementById('btnStop').classList.remove('show');
+    if(pollTmr){clearInterval(pollTmr);pollTmr=null;}
+  }
+}
+
+function renderPipeline(phase,running){
+  const map={scraping:'pp-scrape',ai_keywords:'pp-ai',emailing:'pp-email',done:'pp-done'};
+  const all=['pp-scrape','pp-ai','pp-leads','pp-email','pp-done'];
+  all.forEach(id=>{const el=document.getElementById(id);if(el)el.className='pipe-step';});
+  if(phase==='done'){all.forEach(id=>{const el=document.getElementById(id);if(el)el.classList.add('p-done');});}
+  else if(running&&map[phase]){
+    // mark active
+    const activeId=map[phase];
+    document.getElementById(activeId).classList.add('p-active');
+    // mark previous as done
+    const order=['pp-scrape','pp-ai','pp-leads','pp-email','pp-done'];
+    const idx=order.indexOf(activeId);
+    for(let i=0;i<idx;i++){const el=document.getElementById(order[i]);if(el)el.classList.add('p-done');}
+    // leads ready shows done once scraping done
+    if(phase==='emailing'){const el=document.getElementById('pp-leads');if(el)el.classList.add('p-done');}
+  }
+}
+
+function renderFeed(logs){
+  const feed=document.getElementById('actFeed');
+  if(!logs.length){feed.innerHTML='<div class="empty-st"><span class="empty-ico">📡</span>Waiting…</div>';return;}
+  const icos={'🔍':'🔍','✅':'✅','📊':'📊','📬':'📬','📧':'📧','🤖':'🤖','⏳':'⏳','🚀':'🚀','🎉':'🎉','🛑':'🛑','⚠️':'⚠️','❌':'❌','📦':'📦'};
+  function ico(msg){for(const[k]of Object.entries(icos))if(msg.includes(k))return k;return '▸';}
+  feed.innerHTML=[...logs].reverse().slice(0,80).map(l=>`
+    <div class="act-item">
+      <span class="act-time">${l.time}</span>
+      <span class="act-ico">${ico(l.msg)}</span>
+      <span class="act-msg">${esc(l.msg)}</span>
+    </div>`).join('');
+}
+
+// ════ DATABASE ════
+function renderDB(leads){
+  document.getElementById('dbCnt').textContent=leads.length;
+  // update sheet link in db header
+  refreshDerived();
+  const tbody=document.getElementById('dbBody');
+  if(!leads.length){tbody.innerHTML=`<tr><td colspan="10"><div class="empty-st"><span class="empty-ico">🗄️</span>No leads yet.</div></td></tr>`;return;}
+  tbody.innerHTML=leads.map((l,i)=>`
+    <tr>
+      <td style="color:var(--text3);font-family:var(--mono);font-size:11px">${i+1}</td>
+      <td><div style="font-weight:600;color:var(--text);max-width:160px;overflow:hidden;text-overflow:ellipsis">${esc(l.app_name||'')}</div></td>
+      <td style="color:var(--text3);font-size:11px;max-width:120px;overflow:hidden;text-overflow:ellipsis">${esc(l.developer||'')}</td>
+      <td><a class="email-a" href="mailto:${esc(l.email)}">${esc(l.email)}</a></td>
+      <td><span class="bdg bdg-cat">${esc(l.category||'—')}</span></td>
+      <td style="font-family:var(--mono);font-size:11px">${(l.installs||0).toLocaleString()}</td>
+      <td style="font-family:var(--mono);font-size:11px">${l.score?Number(l.score).toFixed(1):'—'}</td>
+      <td style="color:var(--blue3);font-size:11px">${esc(l.keyword||'')}</td>
+      <td>${l.email_sent?'<span class="bdg bdg-sent">✓ Sent</span>':'<span class="bdg bdg-pend">Pending</span>'}</td>
+      <td><a class="ext-a" href="${esc(l.url)}" target="_blank">↗</a></td>
+    </tr>`).join('');
+}
+
+// ════ ANALYTICS ════
+function renderAnalytics(){
+  const leads=allLeads;
+  if(!leads.length) return;
+  const total=leads.length, withEmail=leads.filter(l=>l.email).length, sent=leads.filter(l=>l.email_sent).length;
+  setText('fn1',total);setText('fn1c',total);
+  const p2=total>0?Math.round((withEmail/total)*100):0;
+  document.getElementById('fn2').style.width=p2+'%';setText('fn2',withEmail);setText('fn2c',withEmail);
+  const p3=withEmail>0?Math.round((sent/withEmail)*100):0;
+  document.getElementById('fn3').style.width=p3+'%';setText('fn3',sent);setText('fn3c',sent);
+  // categories
+  const catMap={};leads.forEach(l=>{if(l.category)catMap[l.category]=(catMap[l.category]||0)+1;});
+  const catS=Object.entries(catMap).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  const cMax=catS[0]?catS[0][1]:1;
+  document.getElementById('catBreak').innerHTML=catS.map(([c,n])=>`
+    <div class="prog-row" style="margin-bottom:10px;">
+      <div class="prog-lbl" style="font-size:11px;min-width:100px;overflow:hidden;text-overflow:ellipsis">${esc(c)}</div>
+      <div class="prog-track"><div class="prog-fill pf-blue" style="width:${Math.round((n/cMax)*100)}%"></div></div>
+      <div class="prog-pct">${n}</div>
+    </div>`).join('')||'<div class="empty-st" style="padding:16px">No data</div>';
+  // installs
+  const ir={'0–1K':0,'1K–10K':0,'10K–50K':0};
+  leads.forEach(l=>{const i=l.installs||0;if(i<1000)ir['0–1K']++;else if(i<10000)ir['1K–10K']++;else ir['10K–50K']++;});
+  document.getElementById('installBreak').innerHTML=Object.entries(ir).map(([k,v])=>`
+    <div class="prog-row" style="margin-bottom:10px;">
+      <div class="prog-lbl" style="font-size:11px;min-width:70px">${k}</div>
+      <div class="prog-track"><div class="prog-fill pf-cyan" style="width:${total>0?Math.round((v/total)*100):0}%"></div></div>
+      <div class="prog-pct">${v}</div>
+    </div>`).join('');
+  // keywords
+  const kwM={};leads.forEach(l=>{if(l.keyword)kwM[l.keyword]=(kwM[l.keyword]||0)+1;});
+  const kwS=Object.entries(kwM).sort((a,b)=>b[1]-a[1]);
+  const kwMax=kwS[0]?kwS[0][1]:1;
+  document.getElementById('kwPerf').innerHTML=kwS.map(([k,v])=>`
+    <div class="prog-row" style="margin-bottom:8px;">
+      <div class="prog-lbl" style="font-size:11px;min-width:90px;overflow:hidden;text-overflow:ellipsis">${esc(k)}</div>
+      <div class="prog-track"><div class="prog-fill pf-amber" style="width:${Math.round((v/kwMax)*100)}%"></div></div>
+      <div class="prog-pct">${v}</div>
+    </div>`).join('')||'<div style="color:var(--text3);font-size:12px;padding:8px">—</div>';
+}
+
+// ════ CSV EXPORT ════
+function exportCSV(){
+  if(!allLeads.length){alert('No leads to export.');return;}
+  const h=['App Name','Developer','Email','Category','Installs','Score','URL','Keyword','Scraped At','Email Sent'];
+  const rows=allLeads.map(l=>[l.app_name,l.developer,l.email,l.category,l.installs,l.score,l.url,l.keyword,l.scraped_at,l.email_sent].map(v=>'"'+String(v||'').replace(/"/g,'""')+'"'));
+  const csv=[h,...rows].map(r=>r.join(',')).join('\n');
+  const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);a.download='playleads_'+Date.now()+'.csv';a.click();
+}
+
+// ════ COPY ════
+function copyCode(id){
+  const t=document.getElementById(id).textContent;
+  navigator.clipboard.writeText(t).then(()=>alert('✅ Copied!'));
+}
+
+// ════ UTILS ════
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function setText(id,v){const el=document.getElementById(id);if(el)el.textContent=v;}
+function setBar(fillId,pctId,pct,label){document.getElementById(fillId).style.width=pct+'%';document.getElementById(pctId).textContent=label;}
+function fmtDur(s){return Math.floor(s/60)+'m '+s%60+'s';}
+
+// ════ CLOCK ════
+setInterval(()=>{document.getElementById('clk').textContent=new Date().toLocaleTimeString();},1000);
+
+// ════ INIT ════
+window.addEventListener('load',()=>{loadCfg();checkWarn();fetchSt();startPoll();});
+</script>
+</body>
+</html>
