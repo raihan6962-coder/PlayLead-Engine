@@ -1,0 +1,304 @@
+import os, time, random, smtplib, threading, json, re, logging
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+from google_play_scraper import search, app as gp_app
+from groq import Groq
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import requests
+
+# ── Flask setup ───────────────────────────────────────────────────────────────
+app = Flask(__name__, static_folder=".")
+CORS(app)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger(__name__)
+
+# ── Shared state ──────────────────────────────────────────────────────────────
+stop_event  = threading.Event()
+state_lock  = threading.Lock()
+state = {
+    "running": False, "phase": "idle", "keyword": "",
+    "keywords_used": [], "leads_found": 0, "emails_sent": 0,
+    "logs": [], "leads": []
+}
+
+# ── Runtime config (set per-run from dashboard or env) ────────────────────────
+run_cfg = {}
+
+def get_cfg(key, fallback=""):
+    return run_cfg.get(key) or os.environ.get(key, fallback)
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+def push_log(msg: str):
+    with state_lock:
+        state["logs"].append({"time": time.strftime("%H:%M:%S"), "msg": msg})
+        if len(state["logs"]) > 400:
+            state["logs"] = state["logs"][-400:]
+    log.info(msg)
+
+def upd(**kw):
+    with state_lock:
+        state.update(kw)
+
+# ── Google Sheet via Apps Script ───────────────────────────────────────────────
+def sheet_append(row: dict):
+    url = get_cfg("APPS_SCRIPT_WEB_URL")
+    if not url:
+        push_log("⚠️  Apps Script URL not set — skipping sheet write")
+        return
+    try:
+        requests.post(url, json={"action": "append", "row": row}, timeout=15)
+        push_log(f"  📊 Sheet updated → {row.get('app_name','')}")
+    except Exception as e:
+        push_log(f"  ⚠️  Sheet error: {e}")
+
+# ── AI keyword generation via Groq ────────────────────────────────────────────
+def ai_gen_keywords(original: str, used: list) -> list:
+    key = get_cfg("GROQ_API_KEY")
+    if not key:
+        push_log("⚠️  GROQ_API_KEY not set — cannot generate keywords")
+        return []
+    client = Groq(api_key=key)
+    used_str = ", ".join(used) if used else "none"
+    prompt = (
+        f"You are a Google Play Store keyword expert.\n"
+        f"Original keyword: '{original}'\n"
+        f"Already used: {used_str}\n"
+        f"Generate 5 NEW semantically similar Play Store search keywords. "
+        f"Return ONLY a JSON array of strings, nothing else."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7, max_tokens=200
+        )
+        raw = resp.choices[0].message.content.strip()
+        raw = re.sub(r"```[a-z]*", "", raw).replace("```", "").strip()
+        kws = json.loads(raw)
+        push_log(f"🤖 AI keywords: {kws}")
+        return [k for k in kws if k not in used]
+    except Exception as e:
+        push_log(f"🤖 AI error: {e}")
+        return []
+
+# ── Play Store scraper ────────────────────────────────────────────────────────
+EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+
+def extract_email(text):
+    if not text:
+        return ""
+    m = EMAIL_RE.search(str(text))
+    return m.group(0) if m else ""
+
+def scrape_keyword(keyword: str, seen_ids: set) -> list:
+    push_log(f"🔍 Scraping Play Store → '{keyword}'")
+    leads = []
+    try:
+        results = search(keyword, lang="en", country="us", n_hits=250)
+    except Exception as e:
+        push_log(f"  ❌ Search error: {e}")
+        return leads
+
+    for item in results:
+        if stop_event.is_set():
+            break
+        app_id = item.get("appId", "")
+        if not app_id or app_id in seen_ids:
+            continue
+        try:
+            details = gp_app(app_id, lang="en", country="us")
+        except Exception:
+            continue
+
+        installs = details.get("minInstalls") or 0
+        score    = details.get("score")
+        # Only new / low-install apps
+        if installs > 50_000 and score is not None:
+            continue
+
+        email = (
+            extract_email(details.get("developerEmail", ""))
+            or extract_email(details.get("privacyPolicy", ""))
+        )
+        if not email:
+            continue
+
+        lead = {
+            "app_id":      app_id,
+            "app_name":    details.get("title", ""),
+            "developer":   details.get("developer", ""),
+            "email":       email,
+            "category":    details.get("genre", ""),
+            "installs":    installs,
+            "score":       score,
+            "description": (details.get("description") or "")[:300],
+            "url":         f"https://play.google.com/store/apps/details?id={app_id}",
+            "icon":        details.get("icon", ""),
+            "keyword":     keyword,
+            "scraped_at":  time.strftime("%Y-%m-%d %H:%M:%S"),
+            "email_sent":  False,
+        }
+        leads.append(lead)
+        seen_ids.add(app_id)
+        push_log(f"  ✅ {lead['app_name']} ({email})")
+        time.sleep(0.4)
+
+    push_log(f"  📦 {len(leads)} new leads for '{keyword}'")
+    return leads
+
+# ── Email outreach ────────────────────────────────────────────────────────────
+def build_email_body(lead: dict) -> str:
+    return f"""Hi {lead['developer']} team,
+
+I came across {lead['app_name']} on Google Play and I'm genuinely impressed with what you've built in the {lead['category']} space.
+
+I wanted to reach out personally — I believe there's a real opportunity to help {lead['app_name']} scale faster, whether through user acquisition, monetization, or integrations.
+
+Would you be open to a quick 15-minute call this week to see if there's a fit?
+
+Best regards,
+[Your Name]
+[Your Company]
+
+App: {lead['url']}
+"""
+
+def send_email(lead: dict) -> bool:
+    gmail      = get_cfg("GMAIL_USER")
+    gmail_pass = get_cfg("GMAIL_APP_PASSWORD")
+    if not gmail or not gmail_pass:
+        push_log("⚠️  Gmail credentials not set — skipping")
+        return False
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"Quick question about {lead['app_name']} 🚀"
+        msg["From"]    = gmail
+        msg["To"]      = lead["email"]
+        msg.attach(MIMEText(build_email_body(lead), "plain"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(gmail, gmail_pass)
+            smtp.sendmail(gmail, lead["email"], msg.as_string())
+        push_log(f"  📧 Sent → {lead['email']} ({lead['app_name']})")
+        return True
+    except Exception as e:
+        push_log(f"  ❌ Email failed → {lead['email']}: {e}")
+        return False
+
+# ── Master automation ─────────────────────────────────────────────────────────
+def run_automation(initial_kw: str, target: int):
+    upd(running=True, phase="scraping", keyword=initial_kw,
+        keywords_used=[], leads_found=0, emails_sent=0, logs=[], leads=[])
+    stop_event.clear()
+    push_log(f"🚀 Started | keyword: '{initial_kw}' | target: {target}")
+
+    all_leads   = []
+    seen_ids    = set()
+    kws_used    = [initial_kw]
+    kw_queue    = [initial_kw]
+
+    # ── PHASE 1: SCRAPE ───────────────────────────────────────────────────────
+    while len(all_leads) < target and not stop_event.is_set():
+        if not kw_queue:
+            push_log("🤖 Requesting AI keywords …")
+            new_kws = ai_gen_keywords(initial_kw, kws_used)
+            if not new_kws:
+                push_log("⚠️  No more keywords available. Stopping scrape.")
+                break
+            kw_queue.extend(new_kws)
+
+        kw = kw_queue.pop(0)
+        if kw not in kws_used:
+            kws_used.append(kw)
+        upd(keywords_used=kws_used[:], phase="scraping")
+
+        batch = scrape_keyword(kw, seen_ids)
+        all_leads.extend(batch)
+        upd(leads_found=len(all_leads), leads=[l.copy() for l in all_leads])
+
+        for lead in batch:
+            sheet_append(lead)
+
+        push_log(f"📊 Leads: {len(all_leads)} / {target}")
+
+    if stop_event.is_set():
+        push_log("🛑 Stopped during scraping.")
+        upd(running=False, phase="stopped")
+        return
+
+    push_log(f"✅ Scraping done. Total leads: {len(all_leads)}")
+
+    # ── PHASE 2: EMAIL ────────────────────────────────────────────────────────
+    upd(phase="emailing")
+    push_log("📬 Starting email outreach …")
+
+    for i, lead in enumerate(all_leads):
+        if stop_event.is_set():
+            push_log("🛑 Stopped during email phase.")
+            break
+
+        ok = send_email(lead)
+        lead["email_sent"] = ok
+        with state_lock:
+            if ok:
+                state["emails_sent"] += 1
+            state["leads"] = [l.copy() for l in all_leads]
+
+        sheet_append({**lead, "phase": "email_done"})
+
+        wait = random.uniform(60, 120)
+        push_log(f"  ⏳ Waiting {wait:.0f}s … ({i+1}/{len(all_leads)})")
+        for _ in range(int(wait)):
+            if stop_event.is_set():
+                break
+            time.sleep(1)
+
+    if stop_event.is_set():
+        upd(running=False, phase="stopped")
+    else:
+        push_log("🎉 Automation complete!")
+        upd(running=False, phase="done")
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+@app.route("/")
+def index():
+    return send_from_directory(".", "dashboard.html")
+
+@app.route("/api/start", methods=["POST"])
+def api_start():
+    data    = request.get_json(silent=True) or {}
+    keyword = (data.get("keyword") or "").strip()
+    if not keyword:
+        return jsonify({"error": "keyword required"}), 400
+
+    with state_lock:
+        if state["running"]:
+            return jsonify({"error": "Already running"}), 409
+
+    # Accept config from dashboard body OR fall back to env vars
+    global run_cfg
+    run_cfg = {
+        "GROQ_API_KEY":        data.get("groq_key")    or os.environ.get("GROQ_API_KEY", ""),
+        "GMAIL_USER":          data.get("gmail")        or os.environ.get("GMAIL_USER", ""),
+        "GMAIL_APP_PASSWORD":  data.get("gmail_pass")  or os.environ.get("GMAIL_APP_PASSWORD", ""),
+        "APPS_SCRIPT_WEB_URL": data.get("sheet_url")   or os.environ.get("APPS_SCRIPT_WEB_URL", ""),
+    }
+    target = int(data.get("target") or os.environ.get("TARGET_LEADS", 300))
+
+    threading.Thread(target=run_automation, args=(keyword, target), daemon=True).start()
+    return jsonify({"ok": True, "keyword": keyword})
+
+@app.route("/api/stop", methods=["POST"])
+def api_stop():
+    stop_event.set()
+    push_log("🛑 Stop requested.")
+    return jsonify({"ok": True})
+
+@app.route("/api/status")
+def api_status():
+    with state_lock:
+        return jsonify(dict(state))
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
