@@ -116,24 +116,23 @@ def ai_gen_keywords(original: str, used: list) -> list:
 
 # ── AI email generation per lead ──────────────────────────────────────────────
 def ai_gen_email(lead: dict, base_subject: str, base_body: str) -> tuple[str, str]:
-    """Generate a unique, personalized email for this lead using AI."""
+    """Generate a personalized email keeping the template structure intact."""
     key = get_cfg("GROQ_API_KEY")
     sender_name    = get_cfg("SENDER_NAME", "Your Name")
     sender_company = get_cfg("SENDER_COMPANY", "Your Company")
 
     if not key:
-        # Fallback: use template with basic fill
         subject = fill_template(base_subject, lead)
         body    = fill_template(base_body, lead)
         return subject, body
 
     client = Groq(api_key=key)
-    score_info = f"{lead['score']:.1f} stars" if lead.get("score") else "no ratings yet (brand new)"
+    score_info   = f"{lead['score']:.1f} stars" if lead.get("score") else "no ratings yet (brand new)"
     install_info = f"{lead['installs']:,} installs" if lead.get("installs") else "just launched"
 
-    prompt = f"""You are an expert cold email copywriter. Write a personalized cold outreach email.
+    prompt = f"""You are a cold email personalizer. Your only job is to fill in the base template with the real app details — keeping the structure and wording almost identical.
 
-BASE TEMPLATE (use this as style/structure guide, do NOT copy verbatim):
+BASE TEMPLATE (follow this EXACTLY):
 Subject: {base_subject}
 Body:
 {base_body}
@@ -150,22 +149,20 @@ SENDER:
 - Name: {sender_name}
 - Company: {sender_company}
 
-RULES:
-1. Keep the same VALUE PROPOSITION as the base template
-2. Make subject line unique and compelling (reference the specific app or category)
-3. Personalize body to this specific app's situation (installs, rating, category)
-4. Keep it SHORT (max 120 words body)
-5. Sound human, conversational — NOT salesy
-6. Vary sentence structure from the template — must NOT be copy-paste
-7. End with a soft CTA (15-min call)
-8. Return ONLY valid JSON: {{"subject": "...", "body": "..."}}
-No markdown, no explanation, just JSON."""
+STRICT RULES:
+1. Copy the template EXACTLY — same structure, same sentences, same flow
+2. Only replace placeholder values (app name, developer name, installs, rating, url) with the real app details above
+3. You may change at most 2-3 words in the entire body to naturally fit this specific app — nothing more
+4. Do NOT rewrite sentences, do NOT add new sentences, do NOT remove any sentences
+5. Do NOT change the greeting format, CTA, or sign-off
+6. Return ONLY valid JSON: {{"subject": "...", "body": "..."}}
+No markdown, no explanation, just the JSON object."""
 
     try:
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.9, max_tokens=400
+            temperature=0.3, max_tokens=400
         )
         raw = resp.choices[0].message.content.strip()
         raw = re.sub(r"```[a-z]*", "", raw).replace("```", "").strip()
@@ -260,7 +257,7 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
             try:
                 details = gp_app(app_id, lang="en", country="us")
             except Exception:
-                global_seen_ids.add(app_id)  # mark so we skip next time
+                global_seen_ids.add(app_id)
                 continue
 
             installs = details.get("minInstalls") or 0
