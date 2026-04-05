@@ -68,7 +68,7 @@ def ai_gen_keywords(original: str, used: list) -> list:
     )
     try:
         resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama3-70b-8192",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7, max_tokens=200
         )
@@ -94,7 +94,7 @@ def scrape_keyword(keyword: str, seen_ids: set) -> list:
     push_log(f"🔍 Scraping Play Store → '{keyword}'")
     leads = []
     try:
-        results = search(keyword, lang="en", country="us", n_hits=250)
+        results = search(keyword, lang="en", country="us", n_hits=500)
     except Exception as e:
         push_log(f"  ❌ Search error: {e}")
         return leads
@@ -112,12 +112,7 @@ def scrape_keyword(keyword: str, seen_ids: set) -> list:
 
         installs = details.get("minInstalls") or 0
         score    = details.get("score")
-        ratings  = details.get("ratings") or 0
-        if installs < 1000 or installs > 5000:
-            continue
-        if score is None or score >= 3.0:
-            continue
-        if ratings < 3:
+        if installs > 5000:
             continue
 
         email = (
