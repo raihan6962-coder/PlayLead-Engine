@@ -466,6 +466,50 @@ tbody tr:hover td{background:#0d1525;}
       </div>
     </div>
 
+    <!-- EMAIL TEMPLATE -->
+    <div class="card" style="margin-bottom:18px;">
+      <div class="card-head">Email Template Editor</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:14px;">
+        Variables ব্যবহার করো: <code style="background:#07091a;padding:2px 6px;border-radius:4px;color:var(--cyan)">{{app_name}}</code>
+        <code style="background:#07091a;padding:2px 6px;border-radius:4px;color:var(--cyan)">{{developer}}</code>
+        <code style="background:#07091a;padding:2px 6px;border-radius:4px;color:var(--cyan)">{{category}}</code>
+        <code style="background:#07091a;padding:2px 6px;border-radius:4px;color:var(--cyan)">{{installs}}</code>
+        <code style="background:#07091a;padding:2px 6px;border-radius:4px;color:var(--cyan)">{{score}}</code>
+        <code style="background:#07091a;padding:2px 6px;border-radius:4px;color:var(--cyan)">{{url}}</code>
+        <code style="background:#07091a;padding:2px 6px;border-radius:4px;color:var(--cyan)">{{sender_name}}</code>
+        <code style="background:#07091a;padding:2px 6px;border-radius:4px;color:var(--cyan)">{{sender_company}}</code>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Email Subject</label>
+        <input class="form-input" id="cfg-email-subject" type="text" placeholder="Quick question about {{app_name}} 🚀"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Email Body</label>
+        <textarea class="form-input" id="cfg-email-body" rows="12" style="resize:vertical;line-height:1.7;font-size:12px;">Hi {{developer}} team,
+
+I came across {{app_name}} on Google Play and noticed it's getting some negative reviews lately — which is really common for newer apps still finding their audience.
+
+I run a Play Store review recovery service that helps developers like you quickly clean up rating issues, respond to bad reviews professionally, and protect your app's reputation.
+
+Would you be open to a quick 15-minute chat this week?
+
+Best regards,
+{{sender_name}}
+{{sender_company}}
+
+App: {{url}}</textarea>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <button class="btn-ghost" onclick="previewEmail()">👁 Preview with sample data</button>
+        <button class="btn-ghost" onclick="resetTemplate()">↺ Reset to default</button>
+      </div>
+      <div id="emailPreviewBox" style="display:none;margin-top:14px;background:#03060f;border:1px solid var(--border);border-radius:8px;padding:16px;">
+        <div style="font-size:10px;letter-spacing:1.5px;color:var(--text3);text-transform:uppercase;margin-bottom:10px;">Preview</div>
+        <div style="font-size:12px;color:var(--amber);margin-bottom:6px;font-family:var(--mono);">Subject: <span id="previewSubject"></span></div>
+        <pre id="previewBody" style="font-size:12px;color:var(--text2);white-space:pre-wrap;font-family:var(--mono);line-height:1.7;"></pre>
+      </div>
+    </div>
+
     <!-- ENV helper -->
     <div class="card" style="margin-bottom:18px;">
       <div class="card-head">Render Environment Variables <span style="font-size:10px;color:var(--text3);letter-spacing:0;font-weight:400;text-transform:none;">(copy → Render dashboard → Environment)</span></div>
@@ -500,6 +544,8 @@ function loadCfg(){
   setVal('cfg-appsscript',     cfg.appsscript||'');
   setVal('cfg-sender-name',    cfg.sender_name||'');
   setVal('cfg-sender-company', cfg.sender_company||'');
+  setVal('cfg-email-subject',  cfg.email_subject || 'Quick question about {{app_name}} 🚀');
+  setVal('cfg-email-body',     cfg.email_body    || getDefaultTemplate());
   refreshDerived();
 }
 
@@ -512,6 +558,8 @@ function saveConfig(){
     appsscript:     getVal('cfg-appsscript'),
     sender_name:    getVal('cfg-sender-name'),
     sender_company: getVal('cfg-sender-company'),
+    email_subject:  getVal('cfg-email-subject'),
+    email_body:     getVal('cfg-email-body'),
   };
   localStorage.setItem(CFG_KEY,JSON.stringify(cfg));
   const m=document.getElementById('savedMsg');
@@ -580,6 +628,8 @@ async function startAuto(){
       target:           cfg.target||300,
       sender_name:      cfg.sender_name||'',
       sender_company:   cfg.sender_company||'',
+      email_subject:    cfg.email_subject||'',
+      email_body:       cfg.email_body||'',
     };
     const r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d=await r.json();
@@ -770,6 +820,55 @@ function exportCSV(){
 function copyCode(id){
   const t=document.getElementById(id).textContent;
   navigator.clipboard.writeText(t).then(()=>alert('✅ Copied!'));
+}
+
+// ════ EMAIL TEMPLATE ════
+const DEFAULT_SUBJECT = 'Quick question about {{app_name}} 🚀';
+const DEFAULT_BODY = `Hi {{developer}} team,
+
+I came across {{app_name}} on Google Play and noticed it's getting some negative reviews lately — which is really common for newer apps still finding their audience.
+
+I run a Play Store review recovery service that helps developers like you quickly clean up rating issues, respond to bad reviews professionally, and protect your app's reputation.
+
+Would you be open to a quick 15-minute chat this week?
+
+Best regards,
+{{sender_name}}
+{{sender_company}}
+
+App: {{url}}`;
+
+function getDefaultTemplate(){ return DEFAULT_BODY; }
+
+function fillTemplate(tpl, lead){
+  return tpl
+    .replace(/{{app_name}}/g,       lead.app_name||'')
+    .replace(/{{developer}}/g,      lead.developer||'')
+    .replace(/{{category}}/g,       lead.category||'')
+    .replace(/{{installs}}/g,       lead.installs||'')
+    .replace(/{{score}}/g,          lead.score||'')
+    .replace(/{{url}}/g,            lead.url||'')
+    .replace(/{{sender_name}}/g,    cfg.sender_name||'')
+    .replace(/{{sender_company}}/g, cfg.sender_company||'');
+}
+
+function previewEmail(){
+  const sampleLead = {
+    app_name:'MyApp Pro', developer:'John Dev', category:'Productivity',
+    installs:1500, score:2.4, url:'https://play.google.com/store/apps/details?id=com.example'
+  };
+  const subj = fillTemplate(getVal('cfg-email-subject')||DEFAULT_SUBJECT, sampleLead);
+  const body = fillTemplate(getVal('cfg-email-body')||DEFAULT_BODY, sampleLead);
+  document.getElementById('previewSubject').textContent = subj;
+  document.getElementById('previewBody').textContent    = body;
+  document.getElementById('emailPreviewBox').style.display = 'block';
+}
+
+function resetTemplate(){
+  if(!confirm('Default template-এ ফিরে যাবে?')) return;
+  setVal('cfg-email-subject', DEFAULT_SUBJECT);
+  setVal('cfg-email-body',    DEFAULT_BODY);
+  document.getElementById('emailPreviewBox').style.display='none';
 }
 
 // ════ UTILS ════
