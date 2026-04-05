@@ -95,7 +95,7 @@ body {
 .main { margin-left: 230px; min-height: 100vh; padding: 28px 32px; }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 26px;
+  margin-bottom: 26px; gap: 12px; flex-wrap: wrap;
 }
 .page-title {
   font-family: var(--serif);
@@ -103,11 +103,23 @@ body {
   color: var(--cream);
 }
 .page-title .hi { color: var(--gold2); }
+.topbar-right { display: flex; align-items: center; gap: 8px; }
 .time-badge {
   font-family: var(--mono); font-size: 11px; color: var(--slate);
   background: var(--card); padding: 6px 14px;
   border-radius: 6px; border: 1px solid var(--border);
 }
+
+/* ── KEEPALIVE BADGE ── */
+.ping-badge {
+  font-family: var(--mono); font-size: 10px;
+  padding: 5px 10px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--card);
+  display: flex; align-items: center; gap: 6px;
+  color: var(--slate2); white-space: nowrap;
+}
+.ping-badge.ok  { border-color: #1a3a1a; background: #0a140a; color: var(--green); }
+.ping-badge.off { border-color: #2a1a1a; background: #140a0a; color: var(--red); }
 
 /* ── SECTIONS ── */
 .section { display: none; }
@@ -128,7 +140,6 @@ body {
   display: flex; align-items: center; gap: 10px;
 }
 .card-head::after { content: ''; flex: 1; height: 1px; background: var(--border); }
-.card-head .ch-gold { color: var(--gold); }
 
 /* ── STATS GRID ── */
 .stats-grid {
@@ -225,9 +236,9 @@ body {
   background: var(--card); border: 1px solid var(--border);
   border-radius: var(--r); padding: 22px; margin-bottom: 18px;
 }
-.runner-row { display: flex; gap: 12px; align-items: stretch; }
+.runner-row { display: flex; gap: 12px; align-items: stretch; flex-wrap: wrap; }
 .kw-input {
-  flex: 1; background: #0d0d14;
+  flex: 1; min-width: 200px; background: #0d0d14;
   border: 1px solid var(--border); color: var(--cream);
   font-family: var(--sans); font-size: 14px; font-weight: 400;
   padding: 13px 18px; border-radius: 7px; outline: none;
@@ -242,7 +253,7 @@ body {
   padding: 10px 16px; background: #0d0d14;
   border: 1px solid var(--border); border-radius: 7px;
   cursor: pointer; font-size: 12px; color: var(--slate);
-  transition: all .15s; user-select: none;
+  transition: all .15s; user-select: none; white-space: nowrap;
 }
 .hunter-toggle:hover { border-color: var(--gold); color: var(--gold); }
 .hunter-toggle.active { background: #161209; border-color: var(--gold); color: var(--gold2); }
@@ -297,13 +308,20 @@ body {
 }
 .btn-gold:hover { background: var(--gold); color: #0a0808; }
 .btn-gold:disabled { opacity: .3; cursor: not-allowed; }
+.btn-clear {
+  background: transparent; color: var(--red);
+  border: 1px solid #3a1414; padding: 8px 16px; border-radius: 6px;
+  font-size: 11px; cursor: pointer; font-family: var(--mono);
+  transition: all .15s; white-space: nowrap;
+}
+.btn-clear:hover { background: #1a0808; border-color: var(--red); }
 
-/* ── SEND PENDING BUTTON ── */
+/* ── PENDING BAR ── */
 .pending-bar {
   background: #161209; border: 1px solid #2a2215;
   border-radius: var(--r); padding: 16px 20px;
   display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 18px; gap: 12px;
+  margin-bottom: 18px; gap: 12px; flex-wrap: wrap;
 }
 .pending-bar-info { font-size: 12px; color: var(--slate); }
 .pending-bar-info strong { color: var(--gold2); }
@@ -371,6 +389,21 @@ tbody tr:hover td { background: #13131c; }
   background: none; border: none; color: var(--slate2); cursor: pointer; font-size: 13px; padding: 4px;
 }
 .pass-toggle:hover { color: var(--slate); }
+
+/* ── KEEP ALIVE SECTION ── */
+.keepalive-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 22px; margin-bottom: 14px;
+}
+.ka-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.ka-status {
+  font-family: var(--mono); font-size: 11px;
+  margin-top: 12px; padding: 10px 14px;
+  border-radius: 6px; border: 1px solid var(--border);
+  color: var(--slate2); background: #0d0d14; line-height: 1.8;
+}
+.ka-status.active { border-color: #1a3a1a; background: #0a140a; color: var(--green); }
+.ka-status.off    { border-color: #2a1a1a; background: #140a0a; color: var(--red); }
 
 /* ── AS BOX ── */
 .as-box {
@@ -463,27 +496,37 @@ tbody tr:hover td { background: #13131c; }
 <main class="main">
   <div class="topbar">
     <div class="page-title" id="pgTitle">⚡ <span class="hi">Automation</span></div>
-    <div class="time-badge" id="clk">--:--:--</div>
+    <div class="topbar-right">
+      <div class="ping-badge" id="pingBadge" title="Keep-Alive status">⚡ Keep-Alive: OFF</div>
+      <div class="time-badge" id="clk">--:--:--</div>
+    </div>
   </div>
   <div class="cfg-warn" id="cfgWarn">⚠️ &nbsp;Setup incomplete — go to <strong>Setup &amp; Config</strong> first.</div>
 
   <!-- ══ AUTOMATION ══ -->
   <section class="section active" id="sec-automation">
 
-    <!-- Send Pending Bar (shows when automation idle + pending leads exist) -->
     <div class="pending-bar" id="pendingBar" style="display:none;">
       <div class="pending-bar-info">
-        📬 <strong id="pendingCount">0</strong> leads pending email — automation is idle
+        📬 <strong id="pendingCount">0</strong> leads pending email — automation idle
       </div>
-      <button class="btn-gold" id="btnSendPending" onclick="sendPending()">▶ Send Pending Emails</button>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn-clear" onclick="clearHistory()">🗑 Clear History</button>
+        <button class="btn-gold" id="btnSendPending" onclick="sendPending()">▶ Send Pending</button>
+      </div>
     </div>
 
     <div class="runner-card">
-      <div class="card-head">Launch Automation</div>
+      <div class="card-head">
+        Launch Automation
+        <span style="margin-left:auto;">
+          <button class="btn-clear" id="btnClear" onclick="clearHistory()" style="font-size:10px;padding:5px 12px;">🗑 Clear All History</button>
+        </span>
+      </div>
       <div class="runner-row">
         <input class="kw-input" id="kwInput" type="text" placeholder="Keyword — e.g. budget tracker, meditation app …"/>
-        <div class="hunter-toggle" id="hunterToggle" onclick="toggleHunter()" title="Hunter Mode">
-          🎯 Hunter Mode
+        <div class="hunter-toggle" id="hunterToggle" onclick="toggleHunter()" title="Hunter Mode: target low-rating apps">
+          🎯 Hunter
         </div>
         <button class="btn-primary" id="btnStart" onclick="startAuto()">▶ Start</button>
         <button class="btn-danger" id="btnStop" onclick="stopAuto()">⏹ Stop</button>
@@ -494,7 +537,7 @@ tbody tr:hover td { background: #13131c; }
           <input class="hf-input" id="hf-installs" type="number" placeholder="5000" value="5000"/>
         </div>
         <div>
-          <div class="hf-label">Max Rating (score)</div>
+          <div class="hf-label">Max Rating</div>
           <input class="hf-input" id="hf-score" type="number" step="0.1" placeholder="2.5" value="2.5"/>
         </div>
       </div>
@@ -504,7 +547,7 @@ tbody tr:hover td { background: #13131c; }
       <div class="pipe-step" id="pp-scrape"><span class="pipe-ico">🔍</span>Scraping</div>
       <div class="pipe-step" id="pp-ai"><span class="pipe-ico">🤖</span>AI Keywords</div>
       <div class="pipe-step" id="pp-leads"><span class="pipe-ico">📋</span>Leads Ready</div>
-      <div class="pipe-step" id="pp-email"><span class="pipe-ico">📧</span>Emailing</div>
+      <div class="pipe-step" id="pp-email"><span class="pipe-ico">📧</span>AI Email</div>
       <div class="pipe-step" id="pp-done"><span class="pipe-ico">✅</span>Complete</div>
     </div>
 
@@ -585,6 +628,7 @@ tbody tr:hover td { background: #13131c; }
         <span>All Leads &nbsp;<span id="dbCnt" style="color:var(--gold2);font-family:var(--serif);font-size:18px;letter-spacing:0;font-weight:700">0</span></span>
         <div style="display:flex;gap:8px;align-items:center;">
           <span id="sheetLinkWrap"></span>
+          <button class="btn-clear" onclick="clearHistory()">🗑 Clear History</button>
           <button class="btn-ghost" onclick="exportCSV()">⬇ Export CSV</button>
         </div>
       </div>
@@ -606,8 +650,8 @@ tbody tr:hover td { background: #13131c; }
     <div class="spam-card">
       <div class="card-head">🧪 Spam Test — Email Preview</div>
       <p style="font-size:12px;color:var(--slate);margin-bottom:18px;line-height:1.7;">
-        তোমার email template টা spam হচ্ছে কিনা বুঝতে এখানে তোমার নিজের email দাও।
-        System random/sample app data দিয়ে personalize করে ওই email-এ পাঠাবে।
+        AI তোমার template দেখে একটা unique email বানাবে এবং এই test email এ পাঠাবে।
+        Inbox এ আসলে ✅, Spam এ গেলে template টা আরো improve করো।
       </p>
       <div class="form-row" style="margin-bottom:14px;">
         <div class="form-group" style="margin-bottom:0;">
@@ -615,27 +659,26 @@ tbody tr:hover td { background: #13131c; }
           <input class="form-input" id="spamTestEmail" type="email" placeholder="yourname@gmail.com"/>
         </div>
         <div class="form-group" style="margin-bottom:0;">
-          <label class="form-label">Sample App Name (optional)</label>
+          <label class="form-label">Sample App Name</label>
           <input class="form-input" id="spamSampleApp" type="text" placeholder="MyApp Pro"/>
         </div>
       </div>
       <div class="form-row" style="margin-bottom:18px;">
         <div class="form-group" style="margin-bottom:0;">
-          <label class="form-label">Sample Developer (optional)</label>
+          <label class="form-label">Sample Developer</label>
           <input class="form-input" id="spamSampleDev" type="text" placeholder="John Dev"/>
         </div>
         <div class="form-group" style="margin-bottom:0;">
-          <label class="form-label">Sample Rating (optional)</label>
+          <label class="form-label">Sample Rating</label>
           <input class="form-input" id="spamSampleScore" type="number" step="0.1" placeholder="2.1" value="2.1"/>
         </div>
       </div>
       <button class="btn-primary" onclick="runSpamTest()" id="btnSpamTest">📤 Send Test Email</button>
       <div id="spamResult" class="spam-result"></div>
     </div>
-
     <div class="card">
-      <div class="card-head">Email Template Preview</div>
-      <div style="font-size:11px;color:var(--slate2);margin-bottom:12px;">Live preview with sample data:</div>
+      <div class="card-head">Email Template Preview (sample data)</div>
+      <div style="font-size:11px;color:var(--slate2);margin-bottom:12px;">AI will rewrite this uniquely per lead — this is just the base structure:</div>
       <div style="background:#0d0d14;border:1px solid var(--border);border-radius:7px;padding:16px;">
         <div style="font-size:10px;color:var(--gold);font-family:var(--mono);margin-bottom:8px;">Subject: <span id="liveSubject" style="color:var(--slate);">—</span></div>
         <pre id="liveBody" style="font-size:11.5px;color:var(--slate);white-space:pre-wrap;font-family:var(--mono);line-height:1.7;">—</pre>
@@ -656,7 +699,7 @@ tbody tr:hover td { background: #13131c; }
               <input class="form-input" id="cfg-groq" type="password" placeholder="gsk_…"/>
               <button class="pass-toggle" onclick="togglePass('cfg-groq',this)">👁</button>
             </div>
-            <div class="form-hint">From <strong style="color:var(--gold)">console.groq.com</strong> — free tier available</div>
+            <div class="form-hint">From <strong style="color:var(--gold)">console.groq.com</strong> — free tier available. Used for AI keywords AND AI email writing.</div>
           </div>
           <div class="form-group">
             <label class="form-label">Target Leads</label>
@@ -679,9 +722,13 @@ tbody tr:hover td { background: #13131c; }
         </div>
 
         <div class="card">
-          <div class="card-head">Email Template</div>
+          <div class="card-head">Email Template (AI Base)</div>
+          <div style="font-size:10px;color:var(--slate2);margin-bottom:10px;line-height:1.7;">
+            AI এই template এর <strong style="color:var(--gold)">value proposition</strong> রেখে প্রতিটা lead এর জন্য unique subject + body লিখবে।
+            Template টা যত ভালো হবে, AI output তত ভালো হবে।
+          </div>
           <div class="form-group">
-            <label class="form-label">Subject Line</label>
+            <label class="form-label">Subject Line Template</label>
             <input class="form-input" id="cfg-email-subject" type="text" placeholder="Quick question about {{app_name}}"/>
           </div>
           <div style="font-size:10px;color:var(--slate2);margin-bottom:8px;">
@@ -690,13 +737,12 @@ tbody tr:hover td { background: #13131c; }
             <code style="background:#0d0d14;padding:1px 5px;border-radius:3px;color:var(--gold)">{{category}}</code>
             <code style="background:#0d0d14;padding:1px 5px;border-radius:3px;color:var(--gold)">{{score}}</code>
             <code style="background:#0d0d14;padding:1px 5px;border-radius:3px;color:var(--gold)">{{installs}}</code>
-            <code style="background:#0d0d14;padding:1px 5px;border-radius:3px;color:var(--gold)">{{url}}</code>
             <code style="background:#0d0d14;padding:1px 5px;border-radius:3px;color:var(--gold)">{{sender_name}}</code>
             <code style="background:#0d0d14;padding:1px 5px;border-radius:3px;color:var(--gold)">{{sender_company}}</code>
           </div>
           <div class="form-group">
-            <label class="form-label">Email Body</label>
-            <textarea class="form-input" id="cfg-email-body" rows="11" style="resize:vertical;line-height:1.7;font-size:11.5px;" oninput="updateLivePreview()"></textarea>
+            <label class="form-label">Email Body Template</label>
+            <textarea class="form-input" id="cfg-email-body" rows="10" style="resize:vertical;line-height:1.7;font-size:11.5px;" oninput="updateLivePreview()"></textarea>
           </div>
           <button class="btn-ghost" onclick="resetTemplate()">↺ Reset to default</button>
         </div>
@@ -704,6 +750,29 @@ tbody tr:hover td { background: #13131c; }
       </div>
 
       <div style="display:flex;flex-direction:column;gap:14px;">
+
+        <!-- KEEP ALIVE -->
+        <div class="keepalive-card">
+          <div class="card-head">⚡ Keep-Alive (Anti-Sleep)</div>
+          <div style="font-size:11px;color:var(--slate);margin-bottom:14px;line-height:1.8;">
+            Render free plan এ server 15 min পরে sleep হয়। নিচে তোমার <strong style="color:var(--gold)">deployed app এর URL</strong> দাও — এই page নিজেই নির্দিষ্ট সময় পর ping করে server কে জাগিয়ে রাখবে।
+          </div>
+          <div class="ka-row">
+            <div class="form-group" style="flex:1;margin-bottom:0;">
+              <label class="form-label">Your App URL</label>
+              <input class="form-input" id="cfg-keepalive-url" type="url" placeholder="https://your-app.onrender.com"/>
+            </div>
+            <div class="form-group" style="min-width:130px;margin-bottom:0;">
+              <label class="form-label">Interval (seconds)</label>
+              <input class="form-input" id="cfg-keepalive-interval" type="number" placeholder="25" value="25" min="10" max="60"/>
+            </div>
+          </div>
+          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn-primary" onclick="startKeepAlive()" id="btnKaStart" style="font-size:11.5px;padding:9px 20px;">▶ Start Keep-Alive</button>
+            <button class="btn-clear" onclick="stopKeepAlive()" id="btnKaStop" style="display:none;padding:9px 16px;">⏹ Stop</button>
+          </div>
+          <div class="ka-status off" id="kaStatus" style="margin-top:10px;">Keep-Alive: OFF — server may sleep after 15 minutes</div>
+        </div>
 
         <div class="card">
           <div class="card-head">Google Sheet Database</div>
@@ -772,7 +841,7 @@ tbody tr:hover td { background: #13131c; }
           <div class="form-group">
             <label class="form-label">Email Apps Script URL</label>
             <input class="form-input" id="cfg-emailscript" type="url" placeholder="https://script.google.com/macros/s/…/exec"/>
-            <div class="form-hint">Gmail দিয়ে email পাঠানোর জন্য আলাদা script</div>
+            <div class="form-hint">Gmail দিয়ে email পাঠানোর জন্য — আলাদা Script deploy করো</div>
           </div>
           <div class="as-box">
             <h4>📧 Email Apps Script Code</h4>
@@ -796,9 +865,9 @@ tbody tr:hover td { background: #13131c; }
       </div>
     </div>
 
-    <!-- ENV block -->
     <div class="card" style="margin-bottom:18px;">
       <div class="card-head">Render Environment Variables</div>
+      <div style="font-size:11px;color:var(--slate);margin-bottom:10px;">Copy these to Render → your service → Environment:</div>
       <div class="env-block" id="envPrev">GROQ_API_KEY=…
 APPS_SCRIPT_WEB_URL=…
 EMAIL_SCRIPT_URL=…
@@ -817,7 +886,7 @@ TARGET_LEADS=300</div>
 
 <script>
 // ════ CONFIG ════
-const CFG_KEY = 'playlead_v4';
+const CFG_KEY = 'playlead_v5';
 let cfg = {};
 
 const DEFAULT_SUBJECT = 'Quick question about {{app_name}}';
@@ -838,30 +907,34 @@ App: {{url}}`;
 
 function loadCfg() {
   try { cfg = JSON.parse(localStorage.getItem(CFG_KEY)||'{}'); } catch(e) { cfg={}; }
-  setVal('cfg-groq',           cfg.groq||'');
-  setVal('cfg-target',         cfg.target||300);
-  setVal('cfg-sender-name',    cfg.sender_name||'');
-  setVal('cfg-sender-company', cfg.sender_company||'');
-  setVal('cfg-email-subject',  cfg.email_subject||DEFAULT_SUBJECT);
-  setVal('cfg-email-body',     cfg.email_body||DEFAULT_BODY);
-  setVal('cfg-sheeturl',       cfg.sheeturl||'');
-  setVal('cfg-appsscript',     cfg.appsscript||'');
-  setVal('cfg-emailscript',    cfg.emailscript||'');
+  setVal('cfg-groq',              cfg.groq||'');
+  setVal('cfg-target',            cfg.target||300);
+  setVal('cfg-sender-name',       cfg.sender_name||'');
+  setVal('cfg-sender-company',    cfg.sender_company||'');
+  setVal('cfg-email-subject',     cfg.email_subject||DEFAULT_SUBJECT);
+  setVal('cfg-email-body',        cfg.email_body||DEFAULT_BODY);
+  setVal('cfg-sheeturl',          cfg.sheeturl||'');
+  setVal('cfg-appsscript',        cfg.appsscript||'');
+  setVal('cfg-emailscript',       cfg.emailscript||'');
+  setVal('cfg-keepalive-url',     cfg.keepalive_url||'');
+  setVal('cfg-keepalive-interval',cfg.keepalive_interval||25);
   refreshDerived();
   updateLivePreview();
 }
 
 function saveConfig() {
   cfg = {
-    groq:           getVal('cfg-groq'),
-    target:         parseInt(getVal('cfg-target'))||300,
-    sender_name:    getVal('cfg-sender-name'),
-    sender_company: getVal('cfg-sender-company'),
-    email_subject:  getVal('cfg-email-subject'),
-    email_body:     getVal('cfg-email-body'),
-    sheeturl:       getVal('cfg-sheeturl'),
-    appsscript:     getVal('cfg-appsscript'),
-    emailscript:    getVal('cfg-emailscript'),
+    groq:               getVal('cfg-groq'),
+    target:             parseInt(getVal('cfg-target'))||300,
+    sender_name:        getVal('cfg-sender-name'),
+    sender_company:     getVal('cfg-sender-company'),
+    email_subject:      getVal('cfg-email-subject'),
+    email_body:         getVal('cfg-email-body'),
+    sheeturl:           getVal('cfg-sheeturl'),
+    appsscript:         getVal('cfg-appsscript'),
+    emailscript:        getVal('cfg-emailscript'),
+    keepalive_url:      getVal('cfg-keepalive-url'),
+    keepalive_interval: parseInt(getVal('cfg-keepalive-interval'))||25,
   };
   localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
   const m = document.getElementById('savedMsg');
@@ -875,10 +948,7 @@ function refreshDerived() {
     `GROQ_API_KEY=${cfg.groq||'…'}\nAPPS_SCRIPT_WEB_URL=${cfg.appsscript||'…'}\nEMAIL_SCRIPT_URL=${cfg.emailscript||'…'}\nSENDER_NAME=${cfg.sender_name||'…'}\nSENDER_COMPANY=${cfg.sender_company||'…'}\nTARGET_LEADS=${cfg.target||300}`;
   const url = cfg.sheeturl||'';
   const lh = url ? `<a class="sheet-link-btn" href="${esc(url)}" target="_blank">📊 Open Sheet ↗</a>` : '';
-  const sw = document.getElementById('sheetLinkRowSetup');
-  const dw = document.getElementById('sheetLinkWrap');
-  if(sw) sw.innerHTML = lh;
-  if(dw) dw.innerHTML = lh;
+  ['sheetLinkRowSetup','sheetLinkWrap'].forEach(id=>{ const e=document.getElementById(id); if(e) e.innerHTML=lh; });
   document.getElementById('ss-sheet').textContent = cfg.appsscript ? 'Yes ✓' : 'Not set';
 }
 
@@ -898,6 +968,61 @@ function togglePass(id, btn) {
   const el = document.getElementById(id);
   el.type = el.type==='password' ? 'text' : 'password';
   btn.textContent = el.type==='password' ? '👁' : '🙈';
+}
+
+// ════ KEEP-ALIVE ════
+let kaTmr = null;
+let kaLastPing = null;
+let kaOk = false;
+
+function startKeepAlive() {
+  const url = getVal('cfg-keepalive-url') || cfg.keepalive_url;
+  if(!url) { alert('Enter your App URL first!'); return; }
+  const interval = (parseInt(getVal('cfg-keepalive-interval')) || 25) * 1000;
+  if(kaTmr) clearInterval(kaTmr);
+  kaTmr = setInterval(()=>doPing(url), interval);
+  doPing(url); // immediate first ping
+  document.getElementById('btnKaStart').style.display = 'none';
+  document.getElementById('btnKaStop').style.display  = 'inline-block';
+  setKaStatus('Pinging…', null);
+}
+
+function stopKeepAlive() {
+  if(kaTmr) { clearInterval(kaTmr); kaTmr = null; }
+  document.getElementById('btnKaStart').style.display = 'inline-block';
+  document.getElementById('btnKaStop').style.display  = 'none';
+  setKaStatus('OFF — server may sleep after 15 minutes', false);
+  document.getElementById('pingBadge').className = 'ping-badge off';
+  document.getElementById('pingBadge').textContent = '⚡ Keep-Alive: OFF';
+}
+
+async function doPing(url) {
+  try {
+    const pingUrl = url.replace(/\/$/, '') + '/api/ping';
+    const start = Date.now();
+    const r = await fetch(pingUrl, {method:'GET', cache:'no-cache'});
+    const ms = Date.now() - start;
+    if(r.ok) {
+      kaLastPing = new Date().toLocaleTimeString();
+      const interval = parseInt(getVal('cfg-keepalive-interval'))||25;
+      setKaStatus(`✅ Active — last ping: ${kaLastPing} (${ms}ms) | every ${interval}s`, true);
+      document.getElementById('pingBadge').className = 'ping-badge ok';
+      document.getElementById('pingBadge').textContent = `⚡ Alive ${kaLastPing}`;
+    } else {
+      setKaStatus(`⚠️ Ping returned ${r.status} — check URL`, false);
+      document.getElementById('pingBadge').className = 'ping-badge off';
+    }
+  } catch(e) {
+    setKaStatus(`❌ Ping failed: ${e.message} — CORS or wrong URL`, false);
+    document.getElementById('pingBadge').className = 'ping-badge off';
+    document.getElementById('pingBadge').textContent = '⚡ Ping failed';
+  }
+}
+
+function setKaStatus(msg, ok) {
+  const el = document.getElementById('kaStatus');
+  el.textContent = 'Keep-Alive: ' + msg;
+  el.className = 'ka-status ' + (ok===true?'active':ok===false?'off':'');
 }
 
 // ════ NAV ════
@@ -924,6 +1049,29 @@ function toggleHunter() {
   hunterActive = !hunterActive;
   document.getElementById('hunterToggle').classList.toggle('active', hunterActive);
   document.getElementById('hunterFields').classList.toggle('show', hunterActive);
+}
+
+// ════ CLEAR HISTORY ════
+async function clearHistory() {
+  if(!confirm('⚠️ Dashboard history tamam clear hobe — leads, logs, sob kisu. Sheet e kono change hobe na. Continue?')) return;
+  try {
+    const r = await fetch('/api/clear', {method:'POST'});
+    const d = await r.json();
+    if(!r.ok) { alert(d.error||'Cannot clear while running'); return; }
+    allLeads = []; lastLogLen = 0; startTime = null; aiCalls = 0;
+    renderDB([]);
+    document.getElementById('actFeed').innerHTML = '<div class="empty-st"><span class="empty-ico">📡</span>Waiting…</div>';
+    document.getElementById('kwChips').innerHTML = '<span style="color:var(--slate2);font-size:11px;">None yet</span>';
+    ['stLeads','stEmails','stKws'].forEach(id=>setText(id,'0'));
+    document.getElementById('stRate').textContent='—';
+    setBar('pfLeads','ppLeads',0,'0%'); setBar('pfEmail','ppEmail',0,'0%'); setBar('pfAI','ppAI',0,'0');
+    document.getElementById('pendingBar').style.display='none';
+    document.getElementById('dbCnt').textContent='0';
+    ['pp-scrape','pp-ai','pp-leads','pp-email','pp-done'].forEach(id=>{
+      const e=document.getElementById(id); if(e) e.className='pipe-step';
+    });
+    alert('✅ History cleared!');
+  } catch(e) { alert('Error: '+e.message); }
 }
 
 // ════ AUTOMATION ════
@@ -975,6 +1123,7 @@ async function sendPending() {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         leads:            pending,
+        groq_key:         cfg.groq,
         email_script_url: cfg.emailscript,
         sheet_url:        cfg.appsscript,
         sender_name:      cfg.sender_name||'',
@@ -1006,12 +1155,11 @@ function renderSt(d) {
   const kws = d.keywords_used||[];
   allLeads = d.leads||[];
 
-  // sidebar dot
   const dot = document.getElementById('sbDot'), sl = document.getElementById('sbStatus');
-  if(running)             { dot.className='dot live';     sl.textContent='Running'; }
-  else if(phase==='done') { dot.className='dot done-dot'; sl.textContent='Done ✓'; }
-  else if(phase==='stopped'){ dot.className='dot err';    sl.textContent='Stopped'; }
-  else                    { dot.className='dot';          sl.textContent='Idle'; }
+  if(running)              { dot.className='dot live';     sl.textContent='Running'; }
+  else if(phase==='done')  { dot.className='dot done-dot'; sl.textContent='Done ✓'; }
+  else if(phase==='stopped'){ dot.className='dot err';     sl.textContent='Stopped'; }
+  else                     { dot.className='dot';          sl.textContent='Idle'; }
 
   document.getElementById('btnStart').disabled = running;
   document.getElementById('btnStop').classList.toggle('show', running);
@@ -1037,7 +1185,7 @@ function renderSt(d) {
   const ap = Math.min(100, Math.round((kws.length-1)/4*100));
   setBar('pfLeads','ppLeads', lp, lp+'%');
   setBar('pfEmail','ppEmail', ep, ep+'%');
-  setBar('pfAI','ppAI', ap, (kws.length-1)+' kws');
+  setBar('pfAI','ppAI', ap, Math.max(0,kws.length-1)+' kws');
 
   renderPipeline(phase, running);
 
@@ -1163,7 +1311,7 @@ async function runSpamTest() {
   const testEmail = document.getElementById('spamTestEmail').value.trim();
   if(!testEmail) { alert('Enter your test email!'); return; }
   const btn = document.getElementById('btnSpamTest');
-  btn.disabled = true; btn.textContent = '⏳ Sending…';
+  btn.disabled = true; btn.textContent = '⏳ AI writing + sending…';
   const result = document.getElementById('spamResult');
   result.className = 'spam-result'; result.style.display = 'none';
   try {
@@ -1174,6 +1322,7 @@ async function runSpamTest() {
         sample_app_name:  document.getElementById('spamSampleApp').value || 'MyApp Pro',
         sample_developer: document.getElementById('spamSampleDev').value || 'John Dev',
         sample_score:     parseFloat(document.getElementById('spamSampleScore').value)||2.1,
+        groq_key:         cfg.groq,
         email_script_url: cfg.emailscript,
         sender_name:      cfg.sender_name||'',
         sender_company:   cfg.sender_company||'',
@@ -1184,14 +1333,17 @@ async function runSpamTest() {
     const d = await r.json();
     if(d.ok) {
       result.className = 'spam-result ok';
-      result.textContent = '✅ ' + d.msg + ' — Check your inbox!';
+      result.textContent = '✅ ' + d.msg + '\nSubject: ' + (d.subject||'') + '\n\n' + (d.body||'');
+      result.style.display = 'block';
     } else {
       result.className = 'spam-result err';
-      result.textContent = '❌ Error: ' + (d.error||'Unknown error');
+      result.textContent = '❌ Error: ' + (d.error||'Unknown');
+      result.style.display = 'block';
     }
   } catch(e) {
     result.className = 'spam-result err';
-    result.textContent = '❌ Network error: ' + e.message;
+    result.textContent = '❌ Network: ' + e.message;
+    result.style.display = 'block';
   }
   btn.disabled = false; btn.textContent = '📤 Send Test Email';
 }
@@ -1213,12 +1365,10 @@ function updateLivePreview() {
     app_name:'MyApp Pro', developer:'John Dev', category:'Productivity',
     installs:1500, score:2.1, url:'https://play.google.com/store/apps/details?id=com.example',
   };
-  const subj = fillTpl(getVal('cfg-email-subject')||DEFAULT_SUBJECT, sample);
-  const body = fillTpl(getVal('cfg-email-body')||DEFAULT_BODY, sample);
   const ls = document.getElementById('liveSubject');
   const lb = document.getElementById('liveBody');
-  if(ls) ls.textContent = subj;
-  if(lb) lb.textContent = body;
+  if(ls) ls.textContent = fillTpl(getVal('cfg-email-subject')||DEFAULT_SUBJECT, sample);
+  if(lb) lb.textContent = fillTpl(getVal('cfg-email-body')||DEFAULT_BODY, sample);
 }
 
 // ════ CSV ════
