@@ -355,18 +355,40 @@ tbody tr:hover td{background:#0d1525;}
         </div>
 
         <div class="card">
-          <div class="card-head">Gmail Outreach</div>
+          <div class="card-head">Email via Apps Script</div>
           <div class="form-group">
-            <label class="form-label">Gmail Address</label>
-            <input class="form-input" id="cfg-gmail" type="email" placeholder="yourname@gmail.com"/>
+            <label class="form-label">Email Apps Script URL</label>
+            <input class="form-input" id="cfg-emailscript" type="url" placeholder="https://script.google.com/macros/s/…/exec"/>
+            <div class="form-hint">আলাদা একটা Apps Script deploy করো যেটা Gmail দিয়ে email পাঠাবে। নিচের code ব্যবহার করো।</div>
           </div>
-          <div class="form-group">
-            <label class="form-label">Gmail App Password</label>
-            <div class="pass-wrap">
-              <input class="form-input" id="cfg-gmailpass" type="password" placeholder="xxxx xxxx xxxx xxxx"/>
-              <button class="pass-toggle" onclick="togglePass('cfg-gmailpass',this)" title="Show/hide">👁</button>
+          <div class="as-box">
+            <h4>📧 Email Apps Script Code</h4>
+            <div style="font-size:11px;color:var(--text3);line-height:1.9;margin-bottom:10px;">
+              1. <strong style="color:var(--text2)">নতুন একটা Google Sheet</strong> বানাও (বা same sheet এ)<br>
+              2. <strong style="color:var(--text2)">Extensions → Apps Script</strong><br>
+              3. নিচের code paste করো → Save → Deploy করো<br>
+              4. Execute as: <strong style="color:var(--text2)">Me</strong> | Who has access: <strong style="color:var(--text2)">Anyone</strong><br>
+              5. URL টা উপরে paste করো
             </div>
-            <div class="form-hint">Google Account → Security → 2-Step Verification → App Passwords</div>
+            <div class="code-block" id="emailCode">function doPost(e) {
+  try {
+    var data = JSON.parse(e.postData.contents);
+    var to      = data.to;
+    var subject = data.subject;
+    var body    = data.body;
+
+    GmailApp.sendEmail(to, subject, body);
+
+    return ContentService
+      .createTextOutput(JSON.stringify({status: "ok"}))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch(err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({status: "error", msg: err.toString()}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}</div>
+            <button class="btn-ghost" style="margin-top:10px;" onclick="copyCode('emailCode')">📋 Copy Email Script Code</button>
           </div>
         </div>
 
@@ -472,8 +494,7 @@ let cfg = {};
 function loadCfg(){
   try{ cfg = JSON.parse(localStorage.getItem(CFG_KEY)||'{}'); }catch(e){ cfg={}; }
   setVal('cfg-groq',           cfg.groq||'');
-  setVal('cfg-gmail',          cfg.gmail||'');
-  setVal('cfg-gmailpass',      cfg.gmailpass||'');
+  setVal('cfg-emailscript',    cfg.emailscript||'');
   setVal('cfg-target',         cfg.target||300);
   setVal('cfg-sheeturl',       cfg.sheeturl||'');
   setVal('cfg-appsscript',     cfg.appsscript||'');
@@ -485,8 +506,7 @@ function loadCfg(){
 function saveConfig(){
   cfg={
     groq:           getVal('cfg-groq'),
-    gmail:          getVal('cfg-gmail'),
-    gmailpass:      getVal('cfg-gmailpass'),
+    emailscript:    getVal('cfg-emailscript'),
     target:         parseInt(getVal('cfg-target'))||300,
     sheeturl:       getVal('cfg-sheeturl'),
     appsscript:     getVal('cfg-appsscript'),
@@ -504,7 +524,7 @@ function saveConfig(){
 function refreshDerived(){
   document.getElementById('tgtNum').textContent = cfg.target||300;
   document.getElementById('envPrev').textContent =
-    `GROQ_API_KEY=${cfg.groq||'…'}\nGMAIL_USER=${cfg.gmail||'…'}\nGMAIL_APP_PASSWORD=${cfg.gmailpass||'…'}\nAPPS_SCRIPT_WEB_URL=${cfg.appsscript||'…'}\nSENDER_NAME=${cfg.sender_name||'…'}\nSENDER_COMPANY=${cfg.sender_company||'…'}\nTARGET_LEADS=${cfg.target||300}`;
+    `GROQ_API_KEY=${cfg.groq||'…'}\nAPPS_SCRIPT_WEB_URL=${cfg.appsscript||'…'}\nEMAIL_SCRIPT_URL=${cfg.emailscript||'…'}\nSENDER_NAME=${cfg.sender_name||'…'}\nSENDER_COMPANY=${cfg.sender_company||'…'}\nTARGET_LEADS=${cfg.target||300}`;
   const url = cfg.sheeturl||'';
   const linkHtml = url ? `<a class="sheet-link-btn" href="${esc(url)}" target="_blank">📊 Open Google Sheet ↗</a>` : '';
   const wrap=document.getElementById('sheetLinkRowSetup');
@@ -515,7 +535,7 @@ function refreshDerived(){
 }
 
 function checkWarn(){
-  const bad = !cfg.groq||!cfg.gmail||!cfg.gmailpass||!cfg.appsscript;
+  const bad = !cfg.groq||!cfg.emailscript||!cfg.appsscript;
   document.getElementById('cfgWarn').classList.toggle('show',bad);
 }
 
@@ -553,14 +573,13 @@ async function startAuto(){
   checkWarn();
   try{
     const body={
-      keyword:        kw,
-      groq_key:       cfg.groq,
-      gmail:          cfg.gmail,
-      gmail_pass:     cfg.gmailpass,
-      sheet_url:      cfg.appsscript,
-      target:         cfg.target||300,
-      sender_name:    cfg.sender_name||'',
-      sender_company: cfg.sender_company||'',
+      keyword:          kw,
+      groq_key:         cfg.groq,
+      sheet_url:        cfg.appsscript,
+      email_script_url: cfg.emailscript,
+      target:           cfg.target||300,
+      sender_name:      cfg.sender_name||'',
+      sender_company:   cfg.sender_company||'',
     };
     const r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d=await r.json();
