@@ -68,7 +68,7 @@ def ai_gen_keywords(original: str, used: list) -> list:
     )
     try:
         resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama3-70b-8192",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7, max_tokens=200
         )
@@ -118,6 +118,8 @@ def scrape_keyword(keyword: str, seen_ids: set) -> list:
         email = (
             extract_email(details.get("developerEmail", ""))
             or extract_email(details.get("privacyPolicy", ""))
+            or extract_email(details.get("description", ""))
+            or extract_email(details.get("recentChanges", ""))
         )
         if not email:
             continue
@@ -146,19 +148,43 @@ def scrape_keyword(keyword: str, seen_ids: set) -> list:
     return leads
 
 # ── Email outreach via Apps Script ───────────────────────────────────────────
-def build_email_body(lead: dict) -> str:
+DEFAULT_EMAIL_BODY = """Hi {{developer}} team,
+
+I came across {{app_name}} on Google Play and noticed it's getting some negative reviews lately — which is really common for newer apps still finding their audience.
+
+I run a Play Store review recovery service that helps developers like you quickly clean up rating issues, respond to bad reviews professionally, and protect your app's reputation.
+
+Would you be open to a quick 15-minute chat this week?
+
+Best regards,
+{{sender_name}}
+{{sender_company}}
+
+App: {{url}}"""
+
+DEFAULT_EMAIL_SUBJECT = "Quick question about {{app_name}} 🚀"
+
+def fill_template(tpl: str, lead: dict) -> str:
     sender_name    = get_cfg("SENDER_NAME", "Your Name")
     sender_company = get_cfg("SENDER_COMPANY", "Your Company")
-    return (
-        f"Hi {lead['developer']} team,\n\n"
-        f"I came across {lead['app_name']} on Google Play and I'm genuinely impressed "
-        f"with what you've built in the {lead['category']} space.\n\n"
-        f"I wanted to reach out personally — I run a Play Store review recovery service "
-        f"that helps app developers quickly recover from negative review spikes, protect "
-        f"their ratings, and improve their Play Store presence.\n\n"
-        f"Would you be open to a quick 15-minute call this week to see if there's a fit?\n\n"
-        f"Best regards,\n{sender_name}\n{sender_company}\n\nApp: {lead['url']}"
+    return (tpl
+        .replace("{{app_name}}",       lead.get("app_name", ""))
+        .replace("{{developer}}",      lead.get("developer", ""))
+        .replace("{{category}}",       lead.get("category", ""))
+        .replace("{{installs}}",       str(lead.get("installs", "")))
+        .replace("{{score}}",          str(lead.get("score", "")))
+        .replace("{{url}}",            lead.get("url", ""))
+        .replace("{{sender_name}}",    sender_name)
+        .replace("{{sender_company}}", sender_company)
     )
+
+def build_email_body(lead: dict) -> str:
+    tpl = get_cfg("EMAIL_BODY", DEFAULT_EMAIL_BODY)
+    return fill_template(tpl, lead)
+
+def build_email_subject(lead: dict) -> str:
+    tpl = get_cfg("EMAIL_SUBJECT", DEFAULT_EMAIL_SUBJECT)
+    return fill_template(tpl, lead)
 
 def send_email(lead: dict) -> bool:
     email_script_url = get_cfg("EMAIL_SCRIPT_URL")   # separate Apps Script for email
@@ -168,7 +194,7 @@ def send_email(lead: dict) -> bool:
     try:
         payload = {
             "to":      lead["email"],
-            "subject": f"Quick question about {lead['app_name']} 🚀",
+            "subject": build_email_subject(lead),
             "body":    build_email_body(lead),
         }
         r = requests.post(email_script_url, json=payload, timeout=30)
@@ -280,6 +306,8 @@ def api_start():
         "EMAIL_SCRIPT_URL":    data.get("email_script_url") or os.environ.get("EMAIL_SCRIPT_URL", ""),
         "SENDER_NAME":         data.get("sender_name")      or os.environ.get("SENDER_NAME", ""),
         "SENDER_COMPANY":      data.get("sender_company")   or os.environ.get("SENDER_COMPANY", ""),
+        "EMAIL_SUBJECT":       data.get("email_subject")    or os.environ.get("EMAIL_SUBJECT", ""),
+        "EMAIL_BODY":          data.get("email_body")       or os.environ.get("EMAIL_BODY", ""),
     }
     target = int(data.get("target") or os.environ.get("TARGET_LEADS", 300))
 
