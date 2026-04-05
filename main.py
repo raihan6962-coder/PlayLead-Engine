@@ -68,7 +68,7 @@ def ai_gen_keywords(original: str, used: list) -> list:
     )
     try:
         resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama3-70b-8192",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7, max_tokens=200
         )
@@ -110,7 +110,7 @@ def scrape_keyword(keyword: str, seen_ids: set) -> list:
         except Exception:
             continue
 
-  installs = details.get("minInstalls") or 0
+        installs = details.get("minInstalls") or 0
         score    = details.get("score")
         ratings  = details.get("ratings") or 0
         if installs < 1000 or installs > 5000:
