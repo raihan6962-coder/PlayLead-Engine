@@ -110,9 +110,14 @@ def scrape_keyword(keyword: str, seen_ids: set) -> list:
         except Exception:
             continue
 
-        installs = details.get("minInstalls") or 0
+  installs = details.get("minInstalls") or 0
         score    = details.get("score")
-        if installs > 50_000 and score is not None:
+        ratings  = details.get("ratings") or 0
+        if installs < 1000 or installs > 5000:
+            continue
+        if score is None or score >= 3.0:
+            continue
+        if ratings < 3:
             continue
 
         email = (
