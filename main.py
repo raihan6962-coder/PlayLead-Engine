@@ -155,20 +155,23 @@ STRICT RULES:
 3. You may change at most 2-3 words in the entire body to naturally fit this specific app — nothing more
 4. Do NOT rewrite sentences, do NOT add new sentences, do NOT remove any sentences
 5. Do NOT change the greeting format, CTA, or sign-off
-6. Return ONLY valid JSON: {{"subject": "...", "body": "..."}}
+6. CRITICAL: Preserve every line break and blank line from the template exactly as-is. Each paragraph must stay as a separate paragraph. Use \\n for newlines inside the JSON string.
+7. Return ONLY valid JSON: {{"subject": "...", "body": "..."}}
 No markdown, no explanation, just the JSON object."""
 
     try:
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3, max_tokens=400
+            temperature=0.3, max_tokens=500
         )
         raw = resp.choices[0].message.content.strip()
         raw = re.sub(r"```[a-z]*", "", raw).replace("```", "").strip()
         data = json.loads(raw)
         subject = data.get("subject") or fill_template(base_subject, lead)
         body    = data.get("body")    or fill_template(base_body, lead)
+        # Ensure literal \n sequences become real newlines (in case AI double-escaped them)
+        body = body.replace("\\n", "\n")
         return subject, body
     except Exception as e:
         push_log(f"  AI email error (using template fallback): {e}")
