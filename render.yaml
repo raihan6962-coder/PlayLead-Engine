@@ -7,11 +7,9 @@ services:
     envVars:
       - key: GROQ_API_KEY
         sync: false
-      - key: GMAIL_USER
-        sync: false
-      - key: GMAIL_APP_PASSWORD
-        sync: false
       - key: APPS_SCRIPT_WEB_URL
+        sync: false
+      - key: EMAIL_SCRIPT_URL
         sync: false
       - key: SENDER_NAME
         sync: false
