@@ -1,10 +1,8 @@
-import os, time, random, smtplib, threading, json, re, logging
+import os, time, random, threading, json, re, logging
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from google_play_scraper import search, app as gp_app
 from groq import Groq
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 import requests
 
 # ── Flask setup ───────────────────────────────────────────────────────────────
@@ -70,7 +68,7 @@ def ai_gen_keywords(original: str, used: list) -> list:
     )
     try:
         resp = client.chat.completions.create(
-            model="llama3-8b-8192",
+            model="llama3-70b-8192",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7, max_tokens=200
         )
@@ -147,44 +145,42 @@ def scrape_keyword(keyword: str, seen_ids: set) -> list:
     push_log(f"  📦 {len(leads)} new leads for '{keyword}'")
     return leads
 
-# ── Email outreach ────────────────────────────────────────────────────────────
+# ── Email outreach via Apps Script ───────────────────────────────────────────
 def build_email_body(lead: dict) -> str:
     sender_name    = get_cfg("SENDER_NAME", "Your Name")
     sender_company = get_cfg("SENDER_COMPANY", "Your Company")
-    return f"""Hi {lead['developer']} team,
-
-I came across {lead['app_name']} on Google Play and I'm genuinely impressed with what you've built in the {lead['category']} space.
-
-I wanted to reach out personally — I run a Play Store review recovery service that helps app developers quickly recover from negative review spikes, protect their ratings, and improve their Play Store presence.
-
-Would you be open to a quick 15-minute call this week to see if there's a fit?
-
-Best regards,
-{sender_name}
-{sender_company}
-
-App: {lead['url']}
-"""
+    return (
+        f"Hi {lead['developer']} team,\n\n"
+        f"I came across {lead['app_name']} on Google Play and I'm genuinely impressed "
+        f"with what you've built in the {lead['category']} space.\n\n"
+        f"I wanted to reach out personally — I run a Play Store review recovery service "
+        f"that helps app developers quickly recover from negative review spikes, protect "
+        f"their ratings, and improve their Play Store presence.\n\n"
+        f"Would you be open to a quick 15-minute call this week to see if there's a fit?\n\n"
+        f"Best regards,\n{sender_name}\n{sender_company}\n\nApp: {lead['url']}"
+    )
 
 def send_email(lead: dict) -> bool:
-    gmail      = get_cfg("GMAIL_USER")
-    gmail_pass = get_cfg("GMAIL_APP_PASSWORD")
-    if not gmail or not gmail_pass:
-        push_log("⚠️  Gmail credentials not set — skipping")
+    email_script_url = get_cfg("EMAIL_SCRIPT_URL")   # separate Apps Script for email
+    if not email_script_url:
+        push_log("⚠️  EMAIL_SCRIPT_URL not set — skipping email")
         return False
     try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"Quick question about {lead['app_name']} 🚀"
-        msg["From"]    = gmail
-        msg["To"]      = lead["email"]
-        msg.attach(MIMEText(build_email_body(lead), "plain"))
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-            smtp.login(gmail, gmail_pass)
-            smtp.sendmail(gmail, lead["email"], msg.as_string())
-        push_log(f"  📧 Sent → {lead['email']} ({lead['app_name']})")
-        return True
+        payload = {
+            "to":      lead["email"],
+            "subject": f"Quick question about {lead['app_name']} 🚀",
+            "body":    build_email_body(lead),
+        }
+        r = requests.post(email_script_url, json=payload, timeout=30)
+        result = r.json() if r.text else {}
+        if result.get("status") == "ok":
+            push_log(f"  📧 Sent → {lead['email']} ({lead['app_name']})")
+            return True
+        else:
+            push_log(f"  ❌ Email failed → {lead['email']}: {result.get('msg','unknown')}")
+            return False
     except Exception as e:
-        push_log(f"  ❌ Email failed → {lead['email']}: {e}")
+        push_log(f"  ❌ Email error → {lead['email']}: {e}")
         return False
 
 # ── Master automation ─────────────────────────────────────────────────────────
@@ -279,12 +275,11 @@ def api_start():
 
     global run_cfg
     run_cfg = {
-        "GROQ_API_KEY":        data.get("groq_key")       or os.environ.get("GROQ_API_KEY", ""),
-        "GMAIL_USER":          data.get("gmail")           or os.environ.get("GMAIL_USER", ""),
-        "GMAIL_APP_PASSWORD":  data.get("gmail_pass")      or os.environ.get("GMAIL_APP_PASSWORD", ""),
+        "GROQ_API_KEY":        data.get("groq_key")        or os.environ.get("GROQ_API_KEY", ""),
         "APPS_SCRIPT_WEB_URL": data.get("sheet_url")       or os.environ.get("APPS_SCRIPT_WEB_URL", ""),
-        "SENDER_NAME":         data.get("sender_name")     or os.environ.get("SENDER_NAME", ""),
-        "SENDER_COMPANY":      data.get("sender_company")  or os.environ.get("SENDER_COMPANY", ""),
+        "EMAIL_SCRIPT_URL":    data.get("email_script_url") or os.environ.get("EMAIL_SCRIPT_URL", ""),
+        "SENDER_NAME":         data.get("sender_name")      or os.environ.get("SENDER_NAME", ""),
+        "SENDER_COMPANY":      data.get("sender_company")   or os.environ.get("SENDER_COMPANY", ""),
     }
     target = int(data.get("target") or os.environ.get("TARGET_LEADS", 300))
 
