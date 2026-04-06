@@ -1,3 +1,5 @@
+--- START OF FILE dashboard.html ---
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -533,7 +535,7 @@ tbody tr:hover td { background: #13131c; }
       <div class="card-head">
         Launch Automation
         <span style="margin-left:auto;">
-          <button class="btn-clear" id="btnClear" onclick="clearHistory()" style="font-size:10px;padding:5px 12px;">🗑 Clear All History</button>
+          <button class="btn-clear" id="btnClear" onclick="clearHistory()" style="font-size:10px;padding:5px 12px;">🗑 Clear Local History</button>
         </span>
       </div>
       <div class="runner-row">
@@ -641,7 +643,7 @@ tbody tr:hover td { background: #13131c; }
         <span>All Leads &nbsp;<span id="dbCnt" style="color:var(--gold2);font-family:var(--serif);font-size:18px;letter-spacing:0;font-weight:700">0</span></span>
         <div style="display:flex;gap:8px;align-items:center;">
           <span id="sheetLinkWrap"></span>
-          <button class="btn-clear" onclick="clearHistory()">🗑 Clear History</button>
+          <button class="btn-ghost" id="btnSyncDb" onclick="syncSheetDatabase()">🔄 Sync with Sheet</button>
           <button class="btn-ghost" onclick="exportCSV()">⬇ Export CSV</button>
         </div>
       </div>
@@ -800,7 +802,7 @@ tbody tr:hover td { background: #13131c; }
             <div class="form-hint">Leads sheet এ data লেখার জন্য</div>
           </div>
           <div class="as-box">
-            <h4>📋 Lead Sheet Apps Script (4 tabs auto-created)</h4>
+            <h4>📋 Lead Sheet Apps Script (Update this in Apps Script)</h4>
             <div style="font-size:10px;color:var(--slate2);line-height:1.9;margin-bottom:10px;">
               Tabs: <strong style="color:var(--gold)">All Leads</strong> | <strong style="color:var(--gold)">Qualified Leads</strong> | <strong style="color:var(--gold)">Email Sent</strong> | <strong style="color:var(--gold)">Keyword Log</strong>
             </div>
@@ -821,7 +823,6 @@ tbody tr:hover td { background: #13131c; }
       sheet.appendRow(Object.values(row));
 
     } else if (action === "mark_sent") {
-      // Mark in All Leads tab
       var allSheet = ss.getSheetByName("All Leads");
       if (allSheet) {
         var appId = data.app_id;
@@ -834,7 +835,6 @@ tbody tr:hover td { background: #13131c; }
           }
         }
       }
-      // Mark in Qualified Leads tab
       var qSheet = ss.getSheetByName("Qualified Leads");
       if (qSheet) {
         var appId = data.app_id;
@@ -847,7 +847,6 @@ tbody tr:hover td { background: #13131c; }
           }
         }
       }
-      // Append to Email Sent tab
       var sentSheet = ss.getSheetByName("Email Sent");
       if (!sentSheet) sentSheet = ss.insertSheet("Email Sent");
       if (sentSheet.getLastRow() === 0) {
@@ -856,19 +855,10 @@ tbody tr:hover td { background: #13131c; }
       sentSheet.appendRow([data.app_id, data.app_name||"", data.email||"", new Date().toLocaleString()]);
 
     } else if (action === "get_pending") {
-      // Return all rows from All Leads where Email Sent = No
       var allSheet = ss.getSheetByName("All Leads");
-      if (!allSheet) {
-        return ContentService
-          .createTextOutput(JSON.stringify({status:"ok", leads:[]}))
-          .setMimeType(ContentService.MimeType.JSON);
-      }
+      if (!allSheet) return ContentService.createTextOutput(JSON.stringify({status:"ok", leads:[]})).setMimeType(ContentService.MimeType.JSON);
       var vals = allSheet.getDataRange().getValues();
-      if (vals.length < 2) {
-        return ContentService
-          .createTextOutput(JSON.stringify({status:"ok", leads:[]}))
-          .setMimeType(ContentService.MimeType.JSON);
-      }
+      if (vals.length < 2) return ContentService.createTextOutput(JSON.stringify({status:"ok", leads:[]})).setMimeType(ContentService.MimeType.JSON);
       var headers = vals[0];
       var colIdx = {};
       headers.forEach(function(h, i) { colIdx[h] = i; });
@@ -890,18 +880,40 @@ tbody tr:hover td { background: #13131c; }
           });
         }
       }
-      return ContentService
-        .createTextOutput(JSON.stringify({status:"ok", leads:leads}))
-        .setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({status:"ok", leads:leads})).setMimeType(ContentService.MimeType.JSON);
+
+    } else if (action === "get_all_leads") {
+      var allSheet = ss.getSheetByName("All Leads");
+      if (!allSheet) return ContentService.createTextOutput(JSON.stringify({status:"ok", leads:[]})).setMimeType(ContentService.MimeType.JSON);
+      var vals = allSheet.getDataRange().getValues();
+      if (vals.length < 2) return ContentService.createTextOutput(JSON.stringify({status:"ok", leads:[]})).setMimeType(ContentService.MimeType.JSON);
+      var headers = vals[0];
+      var colIdx = {};
+      headers.forEach(function(h, i) { colIdx[h] = i; });
+      var leads = [];
+      for (var i = 1; i < vals.length; i++) {
+        var row = vals[i];
+        var emailSent = String(row[colIdx["Email Sent"]] || "").trim().toLowerCase();
+        leads.push({
+          app_id:    String(row[colIdx["App ID"]]    || ""),
+          app_name:  String(row[colIdx["App Name"]]  || ""),
+          developer: String(row[colIdx["Developer"]] || ""),
+          email:     String(row[colIdx["Email"]]     || ""),
+          category:  String(row[colIdx["Category"]]  || ""),
+          installs:  Number(row[colIdx["Installs"]]  || 0),
+          score:     row[colIdx["Score"]] ? Number(row[colIdx["Score"]]) : null,
+          url:       String(row[colIdx["URL"]]       || ""),
+          keyword:   String(row[colIdx["Keyword"]]   || ""),
+          email_sent: (emailSent === "yes")
+        });
+      }
+      leads.reverse();
+      return ContentService.createTextOutput(JSON.stringify({status:"ok", leads:leads})).setMimeType(ContentService.MimeType.JSON);
     }
 
-    return ContentService
-      .createTextOutput(JSON.stringify({status:"ok"}))
-      .setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({status:"ok"})).setMimeType(ContentService.MimeType.JSON);
   } catch(err) {
-    return ContentService
-      .createTextOutput(JSON.stringify({status:"error",msg:err.toString()}))
-      .setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({status:"error",msg:err.toString()})).setMimeType(ContentService.MimeType.JSON);
   }
 }</div>
             <button class="btn-ghost" style="margin-top:10px;" onclick="copyCode('asCode')">📋 Copy Lead Script</button>
@@ -992,10 +1004,16 @@ function loadCfg() {
   setVal('cfg-keepalive-interval',cfg.keepalive_interval||25);
   refreshDerived();
   updateLivePreview();
+  
+  // Auto-start Keep-Alive if it was active
+  if(cfg.keepalive_active) {
+    startKeepAlive(true);
+  }
 }
 
 function saveConfig() {
   cfg = {
+    ...cfg,
     groq:               getVal('cfg-groq'),
     target:             parseInt(getVal('cfg-target'))||300,
     sender_name:        getVal('cfg-sender-name'),
@@ -1045,9 +1063,12 @@ function togglePass(id, btn) {
 // ════ KEEP-ALIVE ════
 let kaTmr = null;
 
-function startKeepAlive() {
+function startKeepAlive(auto = false) {
   const url = getVal('cfg-keepalive-url') || cfg.keepalive_url;
-  if(!url) { alert('Enter your App URL first!'); return; }
+  if(!url) { 
+    if(!auto) alert('Enter your App URL first!'); 
+    return; 
+  }
   const interval = (parseInt(getVal('cfg-keepalive-interval')) || 25) * 1000;
   if(kaTmr) clearInterval(kaTmr);
   kaTmr = setInterval(()=>doPing(url), interval);
@@ -1055,6 +1076,10 @@ function startKeepAlive() {
   document.getElementById('btnKaStart').style.display = 'none';
   document.getElementById('btnKaStop').style.display  = 'inline-block';
   setKaStatus('Pinging…', null);
+  
+  // Save state
+  cfg.keepalive_active = true;
+  localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
 }
 
 function stopKeepAlive() {
@@ -1064,6 +1089,10 @@ function stopKeepAlive() {
   setKaStatus('OFF — server may sleep after 15 minutes', false);
   document.getElementById('pingBadge').className = 'ping-badge off';
   document.getElementById('pingBadge').textContent = '⚡ Keep-Alive: OFF';
+  
+  // Save state
+  cfg.keepalive_active = false;
+  localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
 }
 
 async function doPing(url) {
@@ -1109,7 +1138,9 @@ function showSec(name, el) {
   document.getElementById('sec-'+name).classList.add('active');
   el.classList.add('active');
   document.getElementById('pgTitle').innerHTML = pgTitles[name];
-  if(name==='analytics') renderAnalytics();
+  
+  // Fetch from Sheet when Database or Analytics is opened
+  if(name==='database' || name==='analytics') syncSheetDatabase();
   if(name==='spamtest')  updateLivePreview();
 }
 
@@ -1154,7 +1185,7 @@ function updatePendingBadge(count, running) {
 
 // ════ CLEAR HISTORY ════
 async function clearHistory() {
-  if(!confirm('⚠️ Dashboard history tamam clear hobe — leads, logs, sob kisu. Sheet e kono change hobe na. Continue?')) return;
+  if(!confirm('⚠️ Dashboard local history clear hobe. Sheet e kono change hobe na. Continue?')) return;
   try {
     const r = await fetch('/api/clear', {method:'POST'});
     const d = await r.json();
@@ -1172,7 +1203,7 @@ async function clearHistory() {
     ['pp-scrape','pp-ai','pp-leads','pp-email','pp-done'].forEach(id=>{
       const e=document.getElementById(id); if(e) e.className='pipe-step';
     });
-    alert('✅ History cleared!');
+    alert('✅ Local History cleared!');
   } catch(e) { alert('Error: '+e.message); }
 }
 
@@ -1214,6 +1245,8 @@ async function startAuto() {
 
 async function stopAuto() {
   await fetch('/api/stop', {method:'POST'}).catch(()=>{});
+  document.getElementById('btnStop').classList.remove('show');
+  document.getElementById('btnStart').disabled = false;
 }
 
 async function sendPending() {
@@ -1271,7 +1304,11 @@ function renderSt(d) {
   const leads = d.leads_found||0, emails = d.emails_sent||0;
   const target = cfg.target||300;
   const kws = d.keywords_used||[];
-  allLeads = d.leads||[];
+  
+  // Only update local leads if automation is actively running, otherwise rely on Sheet Sync
+  if(running || phase==='done') {
+    if(d.leads && d.leads.length > 0) allLeads = d.leads;
+  }
 
   const dot = document.getElementById('sbDot'), sl = document.getElementById('sbStatus');
   if(running)              { dot.className='dot live';     sl.textContent='Running'; }
@@ -1308,12 +1345,6 @@ function renderSt(d) {
   const logs = d.logs||[];
   if(logs.length!==lastLogLen) { lastLogLen=logs.length; renderFeed(logs); }
 
-  setText('an-l', leads); setText('an-e', emails);
-  const cats = [...new Set(allLeads.map(l=>l.category).filter(Boolean))];
-  document.getElementById('an-c').textContent = cats.length||'—';
-  const sc = allLeads.map(l=>l.score).filter(x=>x!==null&&x!==undefined);
-  document.getElementById('an-s').textContent = sc.length ? (sc.reduce((a,b)=>a+b,0)/sc.length).toFixed(1) : '—';
-
   if(startTime) {
     document.getElementById('ss-start').textContent = startTime.toLocaleTimeString();
     document.getElementById('ss-dur').textContent = fmtDur(Math.floor((Date.now()-startTime)/1000));
@@ -1322,12 +1353,20 @@ function renderSt(d) {
   document.getElementById('ss-ai').textContent = Math.max(0,kws.length-1)*5;
   document.getElementById('ss-st').textContent = running?'Running':phase==='done'?'Done ✓':'Stopped';
 
-  renderDB(allLeads);
+  // Only render if we are on automation tab to save performance
+  if(document.getElementById('sec-automation').classList.contains('active')) {
+    // We don't need to render DB here unless we want to, DB is synced from Sheet now
+  }
 
   if(!running && (phase==='done'||phase==='stopped'||phase==='idle')) {
     document.getElementById('btnStart').disabled = false;
     document.getElementById('btnStop').classList.remove('show');
     if(pollTmr) { clearInterval(pollTmr); pollTmr=null; }
+    // Auto sync sheet when done
+    if(phase==='done' || phase==='stopped') {
+      syncSheetDatabase();
+      refreshSheetPending();
+    }
   }
 }
 
@@ -1356,7 +1395,32 @@ function renderFeed(logs) {
     </div>`).join('');
 }
 
-// ════ DATABASE ════
+// ════ DATABASE SYNC FROM SHEET ════
+async function syncSheetDatabase() {
+  const sheetUrl = cfg.appsscript;
+  if (!sheetUrl) return;
+  
+  const btn = document.getElementById('btnSyncDb');
+  if(btn) { btn.textContent = '⏳ Syncing...'; btn.disabled = true; }
+  
+  try {
+    const r = await fetch('/api/sheet_all', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ sheet_url: sheetUrl })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      allLeads = d.leads || [];
+      renderDB(allLeads);
+      renderAnalytics();
+    }
+  } catch(e) {
+    console.error("Sync failed", e);
+  }
+  
+  if(btn) { btn.textContent = '🔄 Sync with Sheet'; btn.disabled = false; }
+}
+
 function renderDB(leads) {
   document.getElementById('dbCnt').textContent = leads.length;
   refreshDerived();
@@ -1381,12 +1445,22 @@ function renderDB(leads) {
 function renderAnalytics() {
   const leads = allLeads;
   if(!leads.length) return;
+  
   const total=leads.length, withEmail=leads.filter(l=>l.email).length, sent=leads.filter(l=>l.email_sent).length;
+  
+  setText('an-l', total); 
+  setText('an-e', sent);
+  const cats = [...new Set(leads.map(l=>l.category).filter(Boolean))];
+  document.getElementById('an-c').textContent = cats.length||'—';
+  const sc = leads.map(l=>l.score).filter(x=>x!==null&&x!==undefined);
+  document.getElementById('an-s').textContent = sc.length ? (sc.reduce((a,b)=>a+b,0)/sc.length).toFixed(1) : '—';
+
   setText('fn1',total); setText('fn1c',total);
   const p2=total>0?Math.round((withEmail/total)*100):0;
   document.getElementById('fn2').style.width=p2+'%'; setText('fn2',withEmail); setText('fn2c',withEmail);
   const p3=withEmail>0?Math.round((sent/withEmail)*100):0;
   document.getElementById('fn3').style.width=p3+'%'; setText('fn3',sent); setText('fn3c',sent);
+  
   const catMap={};
   leads.forEach(l=>{ if(l.category) catMap[l.category]=(catMap[l.category]||0)+1; });
   const catS=Object.entries(catMap).sort((a,b)=>b[1]-a[1]).slice(0,6);
@@ -1397,6 +1471,7 @@ function renderAnalytics() {
       <div class="prog-track"><div class="prog-fill pf-gold" style="width:${Math.round((n/cMax)*100)}%"></div></div>
       <div class="prog-pct">${n}</div>
     </div>`).join('')||'<div class="empty-st" style="padding:12px">No data</div>';
+    
   const ir={'0–1K':0,'1K–5K':0,'5K+':0};
   leads.forEach(l=>{ const i=l.installs||0; if(i<1000)ir['0–1K']++; else if(i<=5000)ir['1K–5K']++; else ir['5K+']++; });
   document.getElementById('installBreak').innerHTML=Object.entries(ir).map(([k,v])=>`
@@ -1405,6 +1480,7 @@ function renderAnalytics() {
       <div class="prog-track"><div class="prog-fill pf-blue" style="width:${total>0?Math.round((v/total)*100):0}%"></div></div>
       <div class="prog-pct">${v}</div>
     </div>`).join('');
+    
   const kwM={};
   leads.forEach(l=>{ if(l.keyword) kwM[l.keyword]=(kwM[l.keyword]||0)+1; });
   const kwS=Object.entries(kwM).sort((a,b)=>b[1]-a[1]);
