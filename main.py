@@ -1,3 +1,5 @@
+--- START OF FILE main.py ---
+
 import os, time, random, threading, json, re, logging
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
@@ -170,7 +172,7 @@ No markdown, no explanation, just the JSON object."""
         data = json.loads(raw)
         subject = data.get("subject") or fill_template(base_subject, lead)
         body    = data.get("body")    or fill_template(base_body, lead)
-        # Ensure literal \n sequences become real newlines (in case AI double-escaped them)
+        # Ensure literal \n sequences become real newlines
         body = body.replace("\\n", "\n")
         return subject, body
     except Exception as e:
@@ -300,10 +302,14 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
             global_seen_emails.add(email)
             score_str = f"{score:.1f}★" if score else "new"
             push_log(f"  ✅ {lead['app_name']} | {installs:,} installs | {score_str} | {email}")
-            time.sleep(0.25)
+            
+            # Instantly interruptible wait
+            if stop_event.wait(0.25):
+                break
 
         push_log(f"  [{country}] done. Leads so far: {len(leads)}")
-        time.sleep(0.5)
+        if stop_event.wait(0.5):
+            break
 
     push_log(f"  📦 {len(leads)} new leads from '{keyword}'")
     sheet_log_keyword(keyword, len(leads))
@@ -402,10 +408,9 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
         if i < len(all_leads) - 1:
             wait = random.uniform(60, 120)
             push_log(f"  ⏳ Waiting {wait:.0f}s … ({i+1}/{len(all_leads)})")
-            for _ in range(int(wait)):
-                if stop_event.is_set():
-                    break
-                time.sleep(1)
+            # Instantly interruptible wait
+            if stop_event.wait(wait):
+                break
 
     if stop_event.is_set():
         upd(running=False, phase="stopped")
@@ -436,10 +441,9 @@ def run_send_pending(leads: list):
         if i < len(leads) - 1:
             wait = random.uniform(60, 120)
             push_log(f"  ⏳ Waiting {wait:.0f}s … ({i+1}/{len(leads)})")
-            for _ in range(int(wait)):
-                if stop_event.is_set():
-                    break
-                time.sleep(1)
+            # Instantly interruptible wait
+            if stop_event.wait(wait):
+                break
     push_log(f"✅ Pending done. {sent} sent.")
     upd(running=False, phase="done")
 
@@ -578,6 +582,22 @@ def api_sheet_pending():
         result = r.json() if r.text else {}
         leads = result.get("leads", [])
         return jsonify({"ok": True, "count": len(leads), "leads": leads})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ── Sheet ALL leads fetch (Database Sync) ─────────────────────────────────────
+@application.route("/api/sheet_all", methods=["POST"])
+def api_sheet_all():
+    """Fetch ALL leads from Sheet to populate the Database tab."""
+    data = request.get_json(silent=True) or {}
+    sheet_url = data.get("sheet_url") or os.environ.get("APPS_SCRIPT_WEB_URL", "")
+    if not sheet_url:
+        return jsonify({"error": "sheet_url not set"}), 400
+    try:
+        r = requests.post(sheet_url, json={"action": "get_all_leads"}, timeout=20)
+        result = r.json() if r.text else {}
+        leads = result.get("leads", [])
+        return jsonify({"ok": True, "leads": leads})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
