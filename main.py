@@ -565,6 +565,22 @@ def api_spam_test():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ── Sheet pending fetch ───────────────────────────────────────────────────────
+@application.route("/api/sheet_pending", methods=["POST"])
+def api_sheet_pending():
+    """Fetch leads from Sheet where Email Sent = No, return count + leads list."""
+    data = request.get_json(silent=True) or {}
+    sheet_url = data.get("sheet_url") or os.environ.get("APPS_SCRIPT_WEB_URL", "")
+    if not sheet_url:
+        return jsonify({"error": "sheet_url not set"}), 400
+    try:
+        r = requests.post(sheet_url, json={"action": "get_pending"}, timeout=20)
+        result = r.json() if r.text else {}
+        leads = result.get("leads", [])
+        return jsonify({"ok": True, "count": len(leads), "leads": leads})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     application.run(host="0.0.0.0", port=port, debug=False)
