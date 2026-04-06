@@ -78,7 +78,31 @@ body {
 }
 .nav-item .icon { font-size: 14px; width: 18px; text-align: center; }
 .nav-sep { height: 1px; background: var(--border); margin: 10px 6px; }
-.sidebar-bottom { padding: 16px; border-top: 1px solid var(--border); }
+
+/* ── SEND PENDING BUTTON (sidebar, always visible) ── */
+.sidebar-send-pending {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+.btn-send-pending {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 11px 14px; border-radius: 7px;
+  background: linear-gradient(135deg, #161209, #1e1a0d);
+  border: 1px solid #2a2215; cursor: pointer;
+  font-family: var(--sans); font-size: 12px; font-weight: 600;
+  color: var(--gold2); transition: all .18s;
+  letter-spacing: .2px;
+}
+.btn-send-pending:hover { background: linear-gradient(135deg,#1e180d,#2a2410); border-color: var(--gold); }
+.btn-send-pending:disabled { opacity: .35; cursor: not-allowed; }
+.pending-badge {
+  background: var(--gold); color: #0a0808;
+  font-size: 10px; font-weight: 700; font-family: var(--mono);
+  padding: 2px 7px; border-radius: 10px; min-width: 22px; text-align: center;
+}
+.pending-badge.zero { background: var(--slate2); color: var(--bg); }
+
+.sidebar-bottom { padding: 12px; border-top: 1px solid var(--border); }
 .status-pill {
   display: flex; align-items: center; gap: 8px;
   padding: 9px 13px; background: var(--card); border-radius: 6px;
@@ -316,16 +340,6 @@ body {
 }
 .btn-clear:hover { background: #1a0808; border-color: var(--red); }
 
-/* ── PENDING BAR ── */
-.pending-bar {
-  background: #161209; border: 1px solid #2a2215;
-  border-radius: var(--r); padding: 16px 20px;
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 18px; gap: 12px; flex-wrap: wrap;
-}
-.pending-bar-info { font-size: 12px; color: var(--slate); }
-.pending-bar-info strong { color: var(--gold2); }
-
 /* ── TABLE ── */
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -485,6 +499,15 @@ tbody tr:hover td { background: #13131c; }
     <div class="nav-sep"></div>
     <div class="nav-item" onclick="showSec('setup',this)"><span class="icon">⚙️</span>Setup & Config</div>
   </nav>
+
+  <!-- ── ALWAYS-VISIBLE SEND PENDING BUTTON ── -->
+  <div class="sidebar-send-pending">
+    <button class="btn-send-pending" id="btnSendPending" onclick="sendPending()" title="Send emails to all unsent leads">
+      <span>📬 Send Pending</span>
+      <span class="pending-badge zero" id="pendingBadge">0</span>
+    </button>
+  </div>
+
   <div class="sidebar-bottom">
     <div class="status-pill">
       <div class="dot" id="sbDot"></div>
@@ -505,16 +528,6 @@ tbody tr:hover td { background: #13131c; }
 
   <!-- ══ AUTOMATION ══ -->
   <section class="section active" id="sec-automation">
-
-    <div class="pending-bar" id="pendingBar" style="display:none;">
-      <div class="pending-bar-info">
-        📬 <strong id="pendingCount">0</strong> leads pending email — automation idle
-      </div>
-      <div style="display:flex;gap:8px;align-items:center;">
-        <button class="btn-clear" onclick="clearHistory()">🗑 Clear History</button>
-        <button class="btn-gold" id="btnSendPending" onclick="sendPending()">▶ Send Pending</button>
-      </div>
-    </div>
 
     <div class="runner-card">
       <div class="card-head">
@@ -972,8 +985,6 @@ function togglePass(id, btn) {
 
 // ════ KEEP-ALIVE ════
 let kaTmr = null;
-let kaLastPing = null;
-let kaOk = false;
 
 function startKeepAlive() {
   const url = getVal('cfg-keepalive-url') || cfg.keepalive_url;
@@ -981,7 +992,7 @@ function startKeepAlive() {
   const interval = (parseInt(getVal('cfg-keepalive-interval')) || 25) * 1000;
   if(kaTmr) clearInterval(kaTmr);
   kaTmr = setInterval(()=>doPing(url), interval);
-  doPing(url); // immediate first ping
+  doPing(url);
   document.getElementById('btnKaStart').style.display = 'none';
   document.getElementById('btnKaStop').style.display  = 'inline-block';
   setKaStatus('Pinging…', null);
@@ -1003,7 +1014,7 @@ async function doPing(url) {
     const r = await fetch(pingUrl, {method:'GET', cache:'no-cache'});
     const ms = Date.now() - start;
     if(r.ok) {
-      kaLastPing = new Date().toLocaleTimeString();
+      const kaLastPing = new Date().toLocaleTimeString();
       const interval = parseInt(getVal('cfg-keepalive-interval'))||25;
       setKaStatus(`✅ Active — last ping: ${kaLastPing} (${ms}ms) | every ${interval}s`, true);
       document.getElementById('pingBadge').className = 'ping-badge ok';
@@ -1051,6 +1062,22 @@ function toggleHunter() {
   document.getElementById('hunterFields').classList.toggle('show', hunterActive);
 }
 
+// ════ UPDATE PENDING BADGE (runs every poll) ════
+function updatePendingBadge(leads, running) {
+  const pending = leads.filter(l => !l.email_sent && l.email);
+  const badge = document.getElementById('pendingBadge');
+  const btn   = document.getElementById('btnSendPending');
+  const count = pending.length;
+  badge.textContent = count;
+  if(count > 0) {
+    badge.classList.remove('zero');
+  } else {
+    badge.classList.add('zero');
+  }
+  // Disable while automation is running
+  btn.disabled = running;
+}
+
 // ════ CLEAR HISTORY ════
 async function clearHistory() {
   if(!confirm('⚠️ Dashboard history tamam clear hobe — leads, logs, sob kisu. Sheet e kono change hobe na. Continue?')) return;
@@ -1065,8 +1092,8 @@ async function clearHistory() {
     ['stLeads','stEmails','stKws'].forEach(id=>setText(id,'0'));
     document.getElementById('stRate').textContent='—';
     setBar('pfLeads','ppLeads',0,'0%'); setBar('pfEmail','ppEmail',0,'0%'); setBar('pfAI','ppAI',0,'0');
-    document.getElementById('pendingBar').style.display='none';
     document.getElementById('dbCnt').textContent='0';
+    updatePendingBadge([], false);
     ['pp-scrape','pp-ai','pp-leads','pp-email','pp-done'].forEach(id=>{
       const e=document.getElementById(id); if(e) e.className='pipe-step';
     });
@@ -1116,7 +1143,7 @@ async function stopAuto() {
 
 async function sendPending() {
   const pending = allLeads.filter(l => !l.email_sent && l.email);
-  if(!pending.length) { alert('No pending leads!'); return; }
+  if(!pending.length) { alert('No pending leads! Run automation first to collect leads.'); return; }
   if(!confirm(`Send emails to ${pending.length} pending leads?`)) return;
   try {
     const r = await fetch('/api/send_pending', {
@@ -1164,15 +1191,8 @@ function renderSt(d) {
   document.getElementById('btnStart').disabled = running;
   document.getElementById('btnStop').classList.toggle('show', running);
 
-  // pending bar
-  const pending = allLeads.filter(l => !l.email_sent && l.email);
-  const pb = document.getElementById('pendingBar');
-  if(!running && pending.length > 0) {
-    pb.style.display = 'flex';
-    document.getElementById('pendingCount').textContent = pending.length;
-  } else {
-    pb.style.display = 'none';
-  }
+  // Always update pending badge
+  updatePendingBadge(allLeads, running);
 
   setText('stLeads', leads);
   setText('stEmails', emails);
