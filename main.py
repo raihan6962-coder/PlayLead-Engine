@@ -25,6 +25,9 @@ state = {
 global_seen_ids: set = set()
 global_seen_emails: set = set()
 
+# ── Global Email URL Index ────────────────────────────────────────────────────
+current_email_url_index = 0
+
 run_cfg = {}
 
 def get_cfg(key, fallback=""):
@@ -116,7 +119,6 @@ def ai_gen_keywords(original: str, used: list) -> list:
 
 # ── AI email generation per lead ──────────────────────────────────────────────
 def ai_gen_email(lead: dict, base_subject: str, base_body: str) -> tuple[str, str]:
-    """Generate a personalized email keeping the template structure intact."""
     key = get_cfg("GROQ_API_KEY")
     sender_name    = get_cfg("SENDER_NAME", "Your Name")
     sender_company = get_cfg("SENDER_COMPANY", "Your Company")
@@ -170,7 +172,6 @@ No markdown, no explanation, just the JSON object."""
         data = json.loads(raw)
         subject = data.get("subject") or fill_template(base_subject, lead)
         body    = data.get("body")    or fill_template(base_body, lead)
-        # Ensure literal \n sequences become real newlines
         body = body.replace("\\n", "\n")
         return subject, body
     except Exception as e:
@@ -229,7 +230,6 @@ def passes_filter(installs: int, score, hunter: dict) -> bool:
         if score is not None and score > max_score:
             return False
         return True
-    # Normal mode: <=10 000 installs, rating absent OR <=3.5
     if installs > 10_000:
         return False
     if score is not None and score > 3.5:
@@ -237,7 +237,6 @@ def passes_filter(installs: int, score, hunter: dict) -> bool:
     return True
 
 def scrape_keyword(keyword: str, hunter: dict = None) -> list:
-    """Scrape across multiple country combos; deduplicate globally."""
     global global_seen_ids, global_seen_emails
     push_log(f"🔍 Scraping: '{keyword}'")
     leads = []
@@ -301,7 +300,6 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
             score_str = f"{score:.1f}★" if score else "new"
             push_log(f"  ✅ {lead['app_name']} | {installs:,} installs | {score_str} | {email}")
             
-            # Instantly interruptible wait
             if stop_event.wait(0.25):
                 break
 
@@ -313,27 +311,51 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
     sheet_log_keyword(keyword, len(leads))
     return leads
 
-# ── Email send ────────────────────────────────────────────────────────────────
-def send_email(lead: dict, subject: str, body: str) -> bool:
-    url = get_cfg("EMAIL_SCRIPT_URL")
-    if not url or not lead.get("email"):
+# ── Email send (With Quota Handling & Multiple URLs) ──────────────────────────
+def send_email(lead: dict, subject: str, body: str) -> tuple[str, str]:
+    global current_email_url_index
+    
+    # Parse all URLs (comma separated or newline separated)
+    raw_urls = get_cfg("EMAIL_SCRIPT_URL").replace(',', '\n').split('\n')
+    urls = [u.strip() for u in raw_urls if u.strip()]
+    
+    if not urls or not lead.get("email"):
         push_log("EMAIL_SCRIPT_URL not set or no email")
-        return False
-    try:
-        r = requests.post(url, json={
-            "to":      lead["email"],
-            "subject": subject,
-            "body":    body,
-        }, timeout=30)
-        result = r.json() if r.text else {}
-        if result.get("status") == "ok":
-            push_log(f"  📧 Sent: {lead['email']} ({lead['app_name']})")
-            return True
-        push_log(f"  ❌ Email failed: {lead['email']}: {result.get('msg','?')}")
-        return False
-    except Exception as e:
-        push_log(f"  ❌ Email error: {e}")
-        return False
+        return "error", "Missing config"
+
+    start_index = current_email_url_index % len(urls)
+    
+    for i in range(len(urls)):
+        idx = (start_index + i) % len(urls)
+        url = urls[idx]
+        
+        try:
+            r = requests.post(url, json={
+                "to":      lead["email"],
+                "subject": subject,
+                "body":    body,
+            }, timeout=30)
+            result = r.json() if r.text else {}
+            
+            if result.get("status") == "ok":
+                current_email_url_index = idx # Remember the working URL
+                push_log(f"  📧 Sent: {lead['email']} (using URL #{idx+1})")
+                return "ok", ""
+                
+            err_msg = result.get("msg", "?")
+            if "Service invoked too many times" in err_msg:
+                push_log(f"  ⚠️ Gmail limit reached for URL #{idx+1}. Switching to next...")
+                continue # Try the next URL in the loop
+            else:
+                push_log(f"  ❌ Email failed: {lead['email']}: {err_msg}")
+                return "error", err_msg
+        except Exception as e:
+            push_log(f"  ❌ Email error on URL #{idx+1}: {e}")
+            continue # Try next URL on network error
+
+    # If the loop finishes without returning, it means ALL provided URLs hit the quota limit
+    push_log("  ❌ All email scripts have hit Google's daily limit.")
+    return "quota", "Limit reached"
 
 # ── Master automation ─────────────────────────────────────────────────────────
 def run_automation(initial_kw: str, target: int, hunter: dict = None):
@@ -393,20 +415,32 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
         push_log(f"  🤖 AI writing email for {lead['app_name']} …")
         subject, body = ai_gen_email(lead, base_subject, base_body)
 
-        ok = send_email(lead, subject, body)
-        lead["email_sent"] = ok
-        with state_lock:
-            if ok:
-                state["emails_sent"] += 1
-            state["leads"] = [l.copy() for l in all_leads]
+        # Retry loop for quota limits
+        while not stop_event.is_set():
+            status, msg = send_email(lead, subject, body)
+            
+            if status == "ok":
+                lead["email_sent"] = True
+                with state_lock:
+                    state["emails_sent"] += 1
+                    state["leads"] = [l.copy() for l in all_leads]
+                sheet_mark_sent(lead["app_id"], lead["email"], lead["app_name"])
+                break # Success, move to next lead
+                
+            elif status == "quota":
+                push_log("⏳ All Gmails hit limit! Pausing for 60 minutes before retrying...")
+                if stop_event.wait(3600): # Wait exactly 1 hour, then retry the SAME email
+                    break
+            else:
+                # Normal error (invalid email etc), skip to next lead
+                break
 
-        if ok:
-            sheet_mark_sent(lead["app_id"], lead["email"], lead["app_name"])
+        if stop_event.is_set():
+            break
 
         if i < len(all_leads) - 1:
             wait = random.uniform(60, 120)
             push_log(f"  ⏳ Waiting {wait:.0f}s … ({i+1}/{len(all_leads)})")
-            # Instantly interruptible wait
             if stop_event.wait(wait):
                 break
 
@@ -430,18 +464,34 @@ def run_send_pending(leads: list):
             break
         push_log(f"  🤖 AI writing email for {lead.get('app_name','')} …")
         subject, body = ai_gen_email(lead, base_subject, base_body)
-        ok = send_email(lead, subject, body)
-        if ok:
-            sent += 1
-            sheet_mark_sent(lead["app_id"], lead["email"], lead["app_name"])
-            with state_lock:
-                state["emails_sent"] = state.get("emails_sent", 0) + 1
+        
+        # Retry loop for quota limits
+        while not stop_event.is_set():
+            status, msg = send_email(lead, subject, body)
+            
+            if status == "ok":
+                sent += 1
+                sheet_mark_sent(lead["app_id"], lead["email"], lead["app_name"])
+                with state_lock:
+                    state["emails_sent"] = state.get("emails_sent", 0) + 1
+                break
+                
+            elif status == "quota":
+                push_log("⏳ All Gmails hit limit! Pausing for 60 minutes before retrying...")
+                if stop_event.wait(3600):
+                    break
+            else:
+                break
+
+        if stop_event.is_set():
+            break
+
         if i < len(leads) - 1:
             wait = random.uniform(60, 120)
             push_log(f"  ⏳ Waiting {wait:.0f}s … ({i+1}/{len(leads)})")
-            # Instantly interruptible wait
             if stop_event.wait(wait):
                 break
+                
     push_log(f"✅ Pending done. {sent} sent.")
     upd(running=False, phase="done")
 
@@ -552,7 +602,12 @@ def api_spam_test():
         "email":      test_to,
         "url":        "https://play.google.com/store/apps/details?id=com.example",
     }
-    url = get_cfg("EMAIL_SCRIPT_URL")
+    
+    # Use the first URL for spam test
+    raw_urls = get_cfg("EMAIL_SCRIPT_URL").replace(',', '\n').split('\n')
+    urls = [u.strip() for u in raw_urls if u.strip()]
+    url = urls[0] if urls else None
+    
     if not url:
         return jsonify({"error": "EMAIL_SCRIPT_URL not set"}), 400
     base_subject = get_cfg("EMAIL_SUBJECT") or DEFAULT_EMAIL_SUBJECT
