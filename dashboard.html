@@ -919,11 +919,11 @@ tbody tr:hover td { background: #13131c; }
         </div>
 
         <div class="card">
-          <div class="card-head">Email Apps Script</div>
+          <div class="card-head">Email Apps Script (Multiple Gmail Support)</div>
           <div class="form-group">
-            <label class="form-label">Email Apps Script URL</label>
-            <input class="form-input" id="cfg-emailscript" type="url" placeholder="https://script.google.com/macros/s/…/exec"/>
-            <div class="form-hint">Gmail দিয়ে email পাঠানোর জন্য — আলাদা Script deploy করো</div>
+            <label class="form-label">Email Apps Script URLs</label>
+            <textarea class="form-input" id="cfg-emailscript" rows="3" placeholder="https://script.google.com/macros/s/…/exec&#10;https://script.google.com/macros/s/…/exec" style="resize:vertical;"></textarea>
+            <div class="form-hint">একাধিক জিমেইল ব্যবহার করতে চাইলে প্রতি লাইনে একটি করে URL দিন। একটার লিমিট শেষ হলে অটোমেটিক পরেরটা দিয়ে সেন্ড হবে।</div>
           </div>
           <div class="as-box">
             <h4>📧 Email Apps Script Code</h4>
