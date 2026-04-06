@@ -821,19 +821,78 @@ tbody tr:hover td { background: #13131c; }
       sheet.appendRow(Object.values(row));
 
     } else if (action === "mark_sent") {
+      // Mark in All Leads tab
+      var allSheet = ss.getSheetByName("All Leads");
+      if (allSheet) {
+        var appId = data.app_id;
+        var vals = allSheet.getDataRange().getValues();
+        for (var i = 1; i < vals.length; i++) {
+          if (String(vals[i][vals[i].length - 1]) === appId) {
+            var sentCol = vals[0].indexOf("Email Sent") + 1;
+            if (sentCol > 0) allSheet.getRange(i+1, sentCol).setValue("Yes");
+            break;
+          }
+        }
+      }
+      // Mark in Qualified Leads tab
       var qSheet = ss.getSheetByName("Qualified Leads");
       if (qSheet) {
         var appId = data.app_id;
         var vals = qSheet.getDataRange().getValues();
         for (var i = 1; i < vals.length; i++) {
-          var rowAppId = String(vals[i][vals[i].length - 1]);
-          if (rowAppId === appId) {
+          if (String(vals[i][vals[i].length - 1]) === appId) {
             var sentCol = vals[0].indexOf("Email Sent") + 1;
             if (sentCol > 0) qSheet.getRange(i+1, sentCol).setValue("Yes");
             break;
           }
         }
       }
+      // Append to Email Sent tab
+      var sentSheet = ss.getSheetByName("Email Sent");
+      if (!sentSheet) sentSheet = ss.insertSheet("Email Sent");
+      if (sentSheet.getLastRow() === 0) {
+        sentSheet.appendRow(["App ID","App Name","Email","Sent At"]);
+      }
+      sentSheet.appendRow([data.app_id, data.app_name||"", data.email||"", new Date().toLocaleString()]);
+
+    } else if (action === "get_pending") {
+      // Return all rows from All Leads where Email Sent = No
+      var allSheet = ss.getSheetByName("All Leads");
+      if (!allSheet) {
+        return ContentService
+          .createTextOutput(JSON.stringify({status:"ok", leads:[]}))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      var vals = allSheet.getDataRange().getValues();
+      if (vals.length < 2) {
+        return ContentService
+          .createTextOutput(JSON.stringify({status:"ok", leads:[]}))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      var headers = vals[0];
+      var colIdx = {};
+      headers.forEach(function(h, i) { colIdx[h] = i; });
+      var leads = [];
+      for (var i = 1; i < vals.length; i++) {
+        var row = vals[i];
+        var emailSent = String(row[colIdx["Email Sent"]] || "").trim().toLowerCase();
+        if (emailSent === "no" || emailSent === "") {
+          leads.push({
+            app_id:    String(row[colIdx["App ID"]]    || ""),
+            app_name:  String(row[colIdx["App Name"]]  || ""),
+            developer: String(row[colIdx["Developer"]] || ""),
+            email:     String(row[colIdx["Email"]]     || ""),
+            category:  String(row[colIdx["Category"]]  || ""),
+            installs:  Number(row[colIdx["Installs"]]  || 0),
+            score:     row[colIdx["Score"]] ? Number(row[colIdx["Score"]]) : null,
+            url:       String(row[colIdx["URL"]]       || ""),
+            keyword:   String(row[colIdx["Keyword"]]   || ""),
+          });
+        }
+      }
+      return ContentService
+        .createTextOutput(JSON.stringify({status:"ok", leads:leads}))
+        .setMimeType(ContentService.MimeType.JSON);
     }
 
     return ContentService
@@ -1062,19 +1121,34 @@ function toggleHunter() {
   document.getElementById('hunterFields').classList.toggle('show', hunterActive);
 }
 
-// ════ UPDATE PENDING BADGE (runs every poll) ════
-function updatePendingBadge(leads, running) {
-  const pending = leads.filter(l => !l.email_sent && l.email);
+// ════ UPDATE PENDING BADGE — fetches from Sheet ════
+async function refreshSheetPending() {
+  const sheetUrl = cfg.appsscript;
+  if (!sheetUrl) {
+    updatePendingBadge(0, false);
+    return;
+  }
+  try {
+    const r = await fetch('/api/sheet_pending', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ sheet_url: sheetUrl })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      updatePendingBadge(d.count, false);
+    }
+  } catch(e) {}
+}
+
+function updatePendingBadge(count, running) {
   const badge = document.getElementById('pendingBadge');
   const btn   = document.getElementById('btnSendPending');
-  const count = pending.length;
   badge.textContent = count;
   if(count > 0) {
     badge.classList.remove('zero');
   } else {
     badge.classList.add('zero');
   }
-  // Disable while automation is running
   btn.disabled = running;
 }
 
@@ -1093,7 +1167,8 @@ async function clearHistory() {
     document.getElementById('stRate').textContent='—';
     setBar('pfLeads','ppLeads',0,'0%'); setBar('pfEmail','ppEmail',0,'0%'); setBar('pfAI','ppAI',0,'0');
     document.getElementById('dbCnt').textContent='0';
-    updatePendingBadge([], false);
+    updatePendingBadge(0, false);
+    refreshSheetPending();
     ['pp-scrape','pp-ai','pp-leads','pp-email','pp-done'].forEach(id=>{
       const e=document.getElementById(id); if(e) e.className='pipe-step';
     });
@@ -1142,9 +1217,25 @@ async function stopAuto() {
 }
 
 async function sendPending() {
-  const pending = allLeads.filter(l => !l.email_sent && l.email);
-  if(!pending.length) { alert('No pending leads! Run automation first to collect leads.'); return; }
-  if(!confirm(`Send emails to ${pending.length} pending leads?`)) return;
+  const sheetUrl = cfg.appsscript;
+  if (!sheetUrl) { alert('Sheet URL not set in Setup & Config!'); return; }
+
+  // Step 1: fetch pending leads from Sheet
+  let pending = [];
+  try {
+    const r = await fetch('/api/sheet_pending', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ sheet_url: sheetUrl })
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) { alert('Error fetching from sheet: ' + (d.error||'unknown')); return; }
+    pending = d.leads || [];
+  } catch(e) { alert('Network error: ' + e.message); return; }
+
+  if (!pending.length) { alert('✅ No pending leads in sheet — all already sent!'); return; }
+  if (!confirm(`📬 Sheet এ ${pending.length}টা pending lead আছে। সবগুলোতে email পাঠাবো?`)) return;
+
+  // Step 2: send
   try {
     const r = await fetch('/api/send_pending', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -1191,8 +1282,8 @@ function renderSt(d) {
   document.getElementById('btnStart').disabled = running;
   document.getElementById('btnStop').classList.toggle('show', running);
 
-  // Always update pending badge
-  updatePendingBadge(allLeads, running);
+  // Badge: disable during run, but count comes from refreshSheetPending
+  document.getElementById('btnSendPending').disabled = running;
 
   setText('stLeads', leads);
   setText('stEmails', emails);
@@ -1421,7 +1512,12 @@ function fmtDur(s) { return Math.floor(s/60)+'m '+s%60+'s'; }
 setInterval(()=>{ document.getElementById('clk').textContent=new Date().toLocaleTimeString(); }, 1000);
 
 // ════ INIT ════
-window.addEventListener('load', ()=>{ loadCfg(); checkWarn(); fetchSt(); startPoll(); });
+window.addEventListener('load', ()=>{
+  loadCfg(); checkWarn(); fetchSt(); startPoll();
+  refreshSheetPending();
+  // Refresh sheet pending count every 30s
+  setInterval(refreshSheetPending, 30000);
+});
 </script>
 </body>
 </html>
