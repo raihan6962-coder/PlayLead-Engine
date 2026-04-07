@@ -311,7 +311,7 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
     sheet_log_keyword(keyword, len(leads))
     return leads
 
-# ── Email send (Multiple URLs with Quota Check) ───────────────────────────────
+# ── Email send (Multiple URLs with Better Error Handling) ─────────────────────
 def send_email(lead: dict, subject: str, body: str) -> tuple[str, str]:
     global current_email_url_index
     
@@ -334,7 +334,13 @@ def send_email(lead: dict, subject: str, body: str) -> tuple[str, str]:
                 "to":      lead["email"],
                 "subject": subject,
                 "body":    body,
-            }, timeout=30)
+            }, timeout=30, allow_redirects=True)
+            
+            # Check if Apps Script returned an HTML login page (Deployment Error)
+            if "html" in r.headers.get("Content-Type", "").lower():
+                push_log(f"  ❌ URL #{idx+1} Error: Deployed incorrectly! Must be 'Execute as: Me' and 'Access: Anyone'.")
+                continue
+
             result = r.json() if r.text else {}
             
             if result.get("status") == "ok":
@@ -343,10 +349,14 @@ def send_email(lead: dict, subject: str, body: str) -> tuple[str, str]:
                 return "ok", ""
                 
             err_msg = result.get("msg", "?")
+            
             if "Service invoked too many times" in err_msg:
                 push_log(f"  ⚠️ Limit reached on URL #{idx+1}. Trying next...")
                 quota_hits += 1
                 continue 
+            elif "permission" in err_msg.lower() or "authorize" in err_msg.lower():
+                push_log(f"  ❌ URL #{idx+1} Error: Needs Authorization! Run the script manually once in Google Script Editor.")
+                continue
             else:
                 push_log(f"  ❌ Email failed on URL #{idx+1}: {err_msg}. Trying next...")
                 continue 
@@ -355,7 +365,6 @@ def send_email(lead: dict, subject: str, body: str) -> tuple[str, str]:
             push_log(f"  ❌ Email error on URL #{idx+1}: {e}")
             continue 
 
-    # If ALL provided URLs hit the Google quota limit
     if quota_hits == len(urls):
         push_log("  ❌ All email scripts have hit Google's daily limit.")
         return "quota", "Limit reached"
@@ -421,25 +430,17 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
         push_log(f"  🤖 AI writing email for {lead['app_name']} …")
         subject, body = ai_gen_email(lead, base_subject, base_body)
 
-        # Retry loop for quota limits
-        while not stop_event.is_set():
-            status, msg = send_email(lead, subject, body)
-            
-            if status == "ok":
-                lead["email_sent"] = True
-                with state_lock:
-                    state["emails_sent"] += 1
-                    state["leads"] = [l.copy() for l in all_leads]
-                sheet_mark_sent(lead["app_id"], lead["email"], lead["app_name"])
-                break 
-                
-            elif status == "quota":
-                push_log("⏳ All Gmails hit limit! Pausing for 60 mins before retrying the same lead...")
-                if stop_event.wait(3600): # Wait 1 hour, then retry
-                    break
-            else:
-                push_log("⚠️ Could not send email. Moving to next lead...")
-                break
+        # Try to send. No 1-hour pause, just try once (which loops through all URLs)
+        status, msg = send_email(lead, subject, body)
+        
+        if status == "ok":
+            lead["email_sent"] = True
+            with state_lock:
+                state["emails_sent"] += 1
+                state["leads"] = [l.copy() for l in all_leads]
+            sheet_mark_sent(lead["app_id"], lead["email"], lead["app_name"])
+        else:
+            push_log("⚠️ Could not send email. Moving to next lead...")
 
         if stop_event.is_set():
             break
@@ -472,24 +473,16 @@ def run_send_pending(leads: list):
         push_log(f"  🤖 AI writing email for {lead.get('app_name','')} …")
         subject, body = ai_gen_email(lead, base_subject, base_body)
         
-        # Retry loop for quota limits
-        while not stop_event.is_set():
-            status, msg = send_email(lead, subject, body)
-            
-            if status == "ok":
-                sent += 1
-                sheet_mark_sent(lead["app_id"], lead["email"], lead["app_name"])
-                with state_lock:
-                    state["emails_sent"] = state.get("emails_sent", 0) + 1
-                break
-                
-            elif status == "quota":
-                push_log("⏳ All Gmails hit limit! Pausing for 60 mins before retrying the same lead...")
-                if stop_event.wait(3600):
-                    break
-            else:
-                push_log("⚠️ Could not send email. Moving to next lead...")
-                break
+        # Try to send. No 1-hour pause.
+        status, msg = send_email(lead, subject, body)
+        
+        if status == "ok":
+            sent += 1
+            sheet_mark_sent(lead["app_id"], lead["email"], lead["app_name"])
+            with state_lock:
+                state["emails_sent"] = state.get("emails_sent", 0) + 1
+        else:
+            push_log("⚠️ Could not send email. Moving to next lead...")
 
         if stop_event.is_set():
             break
