@@ -918,12 +918,33 @@ tbody tr:hover td { background: #13131c; }
           </div>
         </div>
 
+        <!-- NEW SMTP OPTION -->
+        <div class="card" style="border-color: var(--gold2);">
+          <div class="card-head" style="color: var(--gold2);">SMTP Email (For 500+ Emails/Day)</div>
+          <div style="font-size:11px;color:var(--slate);margin-bottom:14px;line-height:1.6;">
+            Apps Script এর বদলে সরাসরি Gmail SMTP ব্যবহার করলে দিনে ৫০০টি ইমেইল পাঠানো যায়। নিচে আপনার জিমেইল এবং <strong style="color:var(--gold)">App Password</strong> দিন। (এটি দিলে Apps Script URL কাজ করবে না)।
+          </div>
+          <div class="form-group">
+            <label class="form-label">Gmail Address</label>
+            <input class="form-input" id="cfg-smtp-email" type="email" placeholder="yourname@gmail.com"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">App Password (16-digit)</label>
+            <div class="pass-wrap">
+              <input class="form-input" id="cfg-smtp-pass" type="password" placeholder="xxxx xxxx xxxx xxxx"/>
+              <button class="pass-toggle" onclick="togglePass('cfg-smtp-pass',this)">👁</button>
+            </div>
+            <div class="form-hint">Google Account Security থেকে 2-Step Verification অন করে App Password তৈরি করুন।</div>
+          </div>
+        </div>
+
+        <!-- OLD APPS SCRIPT OPTION -->
         <div class="card">
-          <div class="card-head">Email Apps Script (Multiple Gmail Support)</div>
+          <div class="card-head">Email Apps Script (Fallback)</div>
           <div class="form-group">
             <label class="form-label">Email Apps Script URLs</label>
             <textarea class="form-input" id="cfg-emailscript" rows="3" placeholder="https://script.google.com/macros/s/…/exec&#10;https://script.google.com/macros/s/…/exec" style="resize:vertical;"></textarea>
-            <div class="form-hint">একাধিক জিমেইল ব্যবহার করতে চাইলে প্রতি লাইনে একটি করে URL দিন। একটার লিমিট শেষ হলে অটোমেটিক পরেরটা দিয়ে সেন্ড হবে।</div>
+            <div class="form-hint">উপরে SMTP না দিলে এটি কাজ করবে। একাধিক জিমেইল ব্যবহার করতে চাইলে প্রতি লাইনে একটি করে URL দিন।</div>
           </div>
           <div class="as-box">
             <h4>📧 Email Apps Script Code</h4>
@@ -945,18 +966,6 @@ tbody tr:hover td { background: #13131c; }
         </div>
 
       </div>
-    </div>
-
-    <div class="card" style="margin-bottom:18px;">
-      <div class="card-head">Render Environment Variables</div>
-      <div style="font-size:11px;color:var(--slate);margin-bottom:10px;">Copy these to Render → your service → Environment:</div>
-      <div class="env-block" id="envPrev">GROQ_API_KEY=…
-APPS_SCRIPT_WEB_URL=…
-EMAIL_SCRIPT_URL=…
-SENDER_NAME=…
-SENDER_COMPANY=…
-TARGET_LEADS=300</div>
-      <button class="btn-ghost" style="margin-top:10px;" onclick="copyCode('envPrev')">📋 Copy ENV Block</button>
     </div>
 
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
@@ -1000,10 +1009,11 @@ function loadCfg() {
   setVal('cfg-emailscript',       cfg.emailscript||'');
   setVal('cfg-keepalive-url',     cfg.keepalive_url||'');
   setVal('cfg-keepalive-interval',cfg.keepalive_interval||25);
+  setVal('cfg-smtp-email',        cfg.smtp_email||'');
+  setVal('cfg-smtp-pass',         cfg.smtp_pass||'');
   refreshDerived();
   updateLivePreview();
   
-  // Auto-start Keep-Alive if it was active
   if(cfg.keepalive_active) {
     startKeepAlive(true);
   }
@@ -1023,6 +1033,8 @@ function saveConfig() {
     emailscript:        getVal('cfg-emailscript'),
     keepalive_url:      getVal('cfg-keepalive-url'),
     keepalive_interval: parseInt(getVal('cfg-keepalive-interval'))||25,
+    smtp_email:         getVal('cfg-smtp-email'),
+    smtp_pass:          getVal('cfg-smtp-pass'),
   };
   localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
   const m = document.getElementById('savedMsg');
@@ -1032,8 +1044,6 @@ function saveConfig() {
 
 function refreshDerived() {
   document.getElementById('tgtNum').textContent = cfg.target||300;
-  document.getElementById('envPrev').textContent =
-    `GROQ_API_KEY=${cfg.groq||'…'}\nAPPS_SCRIPT_WEB_URL=${cfg.appsscript||'…'}\nEMAIL_SCRIPT_URL=${cfg.emailscript||'…'}\nSENDER_NAME=${cfg.sender_name||'…'}\nSENDER_COMPANY=${cfg.sender_company||'…'}\nTARGET_LEADS=${cfg.target||300}`;
   const url = cfg.sheeturl||'';
   const lh = url ? `<a class="sheet-link-btn" href="${esc(url)}" target="_blank">📊 Open Sheet ↗</a>` : '';
   ['sheetLinkRowSetup','sheetLinkWrap'].forEach(id=>{ const e=document.getElementById(id); if(e) e.innerHTML=lh; });
@@ -1041,7 +1051,7 @@ function refreshDerived() {
 }
 
 function checkWarn() {
-  const bad = !cfg.groq || !cfg.emailscript || !cfg.appsscript;
+  const bad = !cfg.groq || !cfg.appsscript || (!cfg.emailscript && (!cfg.smtp_email || !cfg.smtp_pass));
   document.getElementById('cfgWarn').classList.toggle('show', bad);
 }
 
@@ -1075,7 +1085,6 @@ function startKeepAlive(auto = false) {
   document.getElementById('btnKaStop').style.display  = 'inline-block';
   setKaStatus('Pinging…', null);
   
-  // Save state
   cfg.keepalive_active = true;
   localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
 }
@@ -1088,7 +1097,6 @@ function stopKeepAlive() {
   document.getElementById('pingBadge').className = 'ping-badge off';
   document.getElementById('pingBadge').textContent = '⚡ Keep-Alive: OFF';
   
-  // Save state
   cfg.keepalive_active = false;
   localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
 }
@@ -1137,7 +1145,6 @@ function showSec(name, el) {
   el.classList.add('active');
   document.getElementById('pgTitle').innerHTML = pgTitles[name];
   
-  // Fetch from Sheet when Database or Analytics is opened
   if(name==='database' || name==='analytics') syncSheetDatabase();
   if(name==='spamtest')  updateLivePreview();
 }
@@ -1150,7 +1157,7 @@ function toggleHunter() {
   document.getElementById('hunterFields').classList.toggle('show', hunterActive);
 }
 
-// ════ UPDATE PENDING BADGE — fetches from Sheet ════
+// ════ UPDATE PENDING BADGE ════
 async function refreshSheetPending() {
   const sheetUrl = cfg.appsscript;
   if (!sheetUrl) {
@@ -1224,6 +1231,8 @@ async function startAuto() {
       groq_key:         cfg.groq,
       sheet_url:        cfg.appsscript,
       email_script_url: cfg.emailscript,
+      smtp_email:       cfg.smtp_email,
+      smtp_pass:        cfg.smtp_pass,
       target:           cfg.target||300,
       sender_name:      cfg.sender_name||'',
       sender_company:   cfg.sender_company||'',
@@ -1251,7 +1260,6 @@ async function sendPending() {
   const sheetUrl = cfg.appsscript;
   if (!sheetUrl) { alert('Sheet URL not set in Setup & Config!'); return; }
 
-  // Step 1: fetch pending leads from Sheet
   let pending = [];
   try {
     const r = await fetch('/api/sheet_pending', {
@@ -1266,7 +1274,6 @@ async function sendPending() {
   if (!pending.length) { alert('✅ No pending leads in sheet — all already sent!'); return; }
   if (!confirm(`📬 Sheet এ ${pending.length}টা pending lead আছে। সবগুলোতে email পাঠাবো?`)) return;
 
-  // Step 2: send
   try {
     const r = await fetch('/api/send_pending', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -1274,6 +1281,8 @@ async function sendPending() {
         leads:            pending,
         groq_key:         cfg.groq,
         email_script_url: cfg.emailscript,
+        smtp_email:       cfg.smtp_email,
+        smtp_pass:        cfg.smtp_pass,
         sheet_url:        cfg.appsscript,
         sender_name:      cfg.sender_name||'',
         sender_company:   cfg.sender_company||'',
@@ -1303,7 +1312,6 @@ function renderSt(d) {
   const target = cfg.target||300;
   const kws = d.keywords_used||[];
   
-  // Only update local leads if automation is actively running, otherwise rely on Sheet Sync
   if(running || phase==='done') {
     if(d.leads && d.leads.length > 0) allLeads = d.leads;
   }
@@ -1316,8 +1324,6 @@ function renderSt(d) {
 
   document.getElementById('btnStart').disabled = running;
   document.getElementById('btnStop').classList.toggle('show', running);
-
-  // Badge: disable during run, but count comes from refreshSheetPending
   document.getElementById('btnSendPending').disabled = running;
 
   setText('stLeads', leads);
@@ -1351,16 +1357,10 @@ function renderSt(d) {
   document.getElementById('ss-ai').textContent = Math.max(0,kws.length-1)*5;
   document.getElementById('ss-st').textContent = running?'Running':phase==='done'?'Done ✓':'Stopped';
 
-  // Only render if we are on automation tab to save performance
-  if(document.getElementById('sec-automation').classList.contains('active')) {
-    // We don't need to render DB here unless we want to, DB is synced from Sheet now
-  }
-
   if(!running && (phase==='done'||phase==='stopped'||phase==='idle')) {
     document.getElementById('btnStart').disabled = false;
     document.getElementById('btnStop').classList.remove('show');
     if(pollTmr) { clearInterval(pollTmr); pollTmr=null; }
-    // Auto sync sheet when done
     if(phase==='done' || phase==='stopped') {
       syncSheetDatabase();
       refreshSheetPending();
@@ -1509,6 +1509,8 @@ async function runSpamTest() {
         sample_score:     parseFloat(document.getElementById('spamSampleScore').value)||2.1,
         groq_key:         cfg.groq,
         email_script_url: cfg.emailscript,
+        smtp_email:       cfg.smtp_email,
+        smtp_pass:        cfg.smtp_pass,
         sender_name:      cfg.sender_name||'',
         sender_company:   cfg.sender_company||'',
         email_subject:    cfg.email_subject||DEFAULT_SUBJECT,
@@ -1589,7 +1591,6 @@ setInterval(()=>{ document.getElementById('clk').textContent=new Date().toLocale
 window.addEventListener('load', ()=>{
   loadCfg(); checkWarn(); fetchSt(); startPoll();
   refreshSheetPending();
-  // Refresh sheet pending count every 30s
   setInterval(refreshSheetPending, 30000);
 });
 </script>
