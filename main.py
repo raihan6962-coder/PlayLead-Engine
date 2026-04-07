@@ -1,4 +1,7 @@
 import os, time, random, threading, json, re, logging
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from google_play_scraper import search, app as gp_app
@@ -311,16 +314,44 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
     sheet_log_keyword(keyword, len(leads))
     return leads
 
-# ── Email send (With Quota Handling & Multiple URLs) ──────────────────────────
+# ── Email send (SMTP + Apps Script Fallback) ──────────────────────────────────
 def send_email(lead: dict, subject: str, body: str) -> tuple[str, str]:
     global current_email_url_index
     
-    # Parse all URLs (comma separated or newline separated)
+    if not lead.get("email"):
+        return "error", "No email"
+
+    smtp_email = get_cfg("SMTP_EMAIL")
+    smtp_pass  = get_cfg("SMTP_PASSWORD")
+
+    # 1. Try SMTP First (If configured)
+    if smtp_email and smtp_pass:
+        try:
+            msg = MIMEMultipart()
+            sender_name = get_cfg('SENDER_NAME', '')
+            msg['From'] = f"{sender_name} <{smtp_email}>" if sender_name else smtp_email
+            msg['To'] = lead["email"]
+            msg['Subject'] = subject
+            msg.attach(MIMEText(body, 'plain'))
+
+            server = smtplib.SMTP('smtp.gmail.com', 587)
+            server.starttls()
+            server.login(smtp_email, smtp_pass)
+            server.send_message(msg)
+            server.quit()
+
+            push_log(f"  📧 Sent (SMTP): {lead['email']} ({lead['app_name']})")
+            return "ok", ""
+        except Exception as e:
+            push_log(f"  ❌ SMTP Email failed: {e}")
+            return "error", str(e)
+
+    # 2. Fallback to Apps Script (If SMTP is not configured)
     raw_urls = get_cfg("EMAIL_SCRIPT_URL").replace(',', '\n').split('\n')
     urls = [u.strip() for u in raw_urls if u.strip()]
     
-    if not urls or not lead.get("email"):
-        push_log("EMAIL_SCRIPT_URL not set or no email")
+    if not urls:
+        push_log("No SMTP and no EMAIL_SCRIPT_URL set")
         return "error", "Missing config"
 
     start_index = current_email_url_index % len(urls)
@@ -338,24 +369,20 @@ def send_email(lead: dict, subject: str, body: str) -> tuple[str, str]:
             result = r.json() if r.text else {}
             
             if result.get("status") == "ok":
-                current_email_url_index = idx # Remember the working URL
-                push_log(f"  📧 Sent: {lead['email']} (using URL #{idx+1})")
+                current_email_url_index = idx 
+                push_log(f"  📧 Sent (Apps Script #{idx+1}): {lead['email']}")
                 return "ok", ""
                 
             err_msg = result.get("msg", "?")
-            if "Service invoked too many times" in err_msg:
-                push_log(f"  ⚠️ Gmail limit reached for URL #{idx+1}. Switching to next...")
-                continue # Try the next URL in the loop
-            else:
-                push_log(f"  ❌ Email failed: {lead['email']}: {err_msg}")
-                return "error", err_msg
+            push_log(f"  ⚠️ Email failed on URL #{idx+1}: {err_msg}. Trying next...")
+            continue 
+            
         except Exception as e:
             push_log(f"  ❌ Email error on URL #{idx+1}: {e}")
-            continue # Try next URL on network error
+            continue 
 
-    # If the loop finishes without returning, it means ALL provided URLs hit the quota limit
-    push_log("  ❌ All email scripts have hit Google's daily limit.")
-    return "quota", "Limit reached"
+    push_log("  ❌ All email scripts failed for this lead.")
+    return "error", "All URLs failed"
 
 # ── Master automation ─────────────────────────────────────────────────────────
 def run_automation(initial_kw: str, target: int, hunter: dict = None):
@@ -415,31 +442,22 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
         push_log(f"  🤖 AI writing email for {lead['app_name']} …")
         subject, body = ai_gen_email(lead, base_subject, base_body)
 
-        # Retry loop for quota limits
-        while not stop_event.is_set():
-            status, msg = send_email(lead, subject, body)
-            
-            if status == "ok":
-                lead["email_sent"] = True
-                with state_lock:
-                    state["emails_sent"] += 1
-                    state["leads"] = [l.copy() for l in all_leads]
-                sheet_mark_sent(lead["app_id"], lead["email"], lead["app_name"])
-                break # Success, move to next lead
-                
-            elif status == "quota":
-                push_log("⏳ All Gmails hit limit! Pausing for 60 minutes before retrying...")
-                if stop_event.wait(3600): # Wait exactly 1 hour, then retry the SAME email
-                    break
-            else:
-                # Normal error (invalid email etc), skip to next lead
-                break
+        status, msg = send_email(lead, subject, body)
+        
+        if status == "ok":
+            lead["email_sent"] = True
+            with state_lock:
+                state["emails_sent"] += 1
+                state["leads"] = [l.copy() for l in all_leads]
+            sheet_mark_sent(lead["app_id"], lead["email"], lead["app_name"])
+        else:
+            push_log("⚠️ Could not send email. Moving to next lead...")
 
         if stop_event.is_set():
             break
 
         if i < len(all_leads) - 1:
-            wait = random.uniform(60, 120)
+            wait = random.uniform(30, 60)
             push_log(f"  ⏳ Waiting {wait:.0f}s … ({i+1}/{len(all_leads)})")
             if stop_event.wait(wait):
                 break
@@ -465,29 +483,21 @@ def run_send_pending(leads: list):
         push_log(f"  🤖 AI writing email for {lead.get('app_name','')} …")
         subject, body = ai_gen_email(lead, base_subject, base_body)
         
-        # Retry loop for quota limits
-        while not stop_event.is_set():
-            status, msg = send_email(lead, subject, body)
-            
-            if status == "ok":
-                sent += 1
-                sheet_mark_sent(lead["app_id"], lead["email"], lead["app_name"])
-                with state_lock:
-                    state["emails_sent"] = state.get("emails_sent", 0) + 1
-                break
-                
-            elif status == "quota":
-                push_log("⏳ All Gmails hit limit! Pausing for 60 minutes before retrying...")
-                if stop_event.wait(3600):
-                    break
-            else:
-                break
+        status, msg = send_email(lead, subject, body)
+        
+        if status == "ok":
+            sent += 1
+            sheet_mark_sent(lead["app_id"], lead["email"], lead["app_name"])
+            with state_lock:
+                state["emails_sent"] = state.get("emails_sent", 0) + 1
+        else:
+            push_log("⚠️ Could not send email. Moving to next lead...")
 
         if stop_event.is_set():
             break
 
         if i < len(leads) - 1:
-            wait = random.uniform(60, 120)
+            wait = random.uniform(30, 60)
             push_log(f"  ⏳ Waiting {wait:.0f}s … ({i+1}/{len(leads)})")
             if stop_event.wait(wait):
                 break
@@ -514,6 +524,8 @@ def api_start():
         "GROQ_API_KEY":        data.get("groq_key")         or os.environ.get("GROQ_API_KEY", ""),
         "APPS_SCRIPT_WEB_URL": data.get("sheet_url")        or os.environ.get("APPS_SCRIPT_WEB_URL", ""),
         "EMAIL_SCRIPT_URL":    data.get("email_script_url") or os.environ.get("EMAIL_SCRIPT_URL", ""),
+        "SMTP_EMAIL":          data.get("smtp_email")       or os.environ.get("SMTP_EMAIL", ""),
+        "SMTP_PASSWORD":       data.get("smtp_pass")        or os.environ.get("SMTP_PASSWORD", ""),
         "SENDER_NAME":         data.get("sender_name")      or os.environ.get("SENDER_NAME", ""),
         "SENDER_COMPANY":      data.get("sender_company")   or os.environ.get("SENDER_COMPANY", ""),
         "EMAIL_SUBJECT":       data.get("email_subject")    or os.environ.get("EMAIL_SUBJECT", ""),
@@ -537,7 +549,6 @@ def api_status():
 
 @application.route("/api/clear", methods=["POST"])
 def api_clear():
-    """Clear all in-memory state AND duplicate trackers. Sheet is untouched."""
     global global_seen_ids, global_seen_emails
     with state_lock:
         if state["running"]:
@@ -569,6 +580,8 @@ def api_send_pending():
     run_cfg = {
         "GROQ_API_KEY":        data.get("groq_key")         or os.environ.get("GROQ_API_KEY", ""),
         "EMAIL_SCRIPT_URL":    data.get("email_script_url") or os.environ.get("EMAIL_SCRIPT_URL", ""),
+        "SMTP_EMAIL":          data.get("smtp_email")       or os.environ.get("SMTP_EMAIL", ""),
+        "SMTP_PASSWORD":       data.get("smtp_pass")        or os.environ.get("SMTP_PASSWORD", ""),
         "SENDER_NAME":         data.get("sender_name")      or os.environ.get("SENDER_NAME", ""),
         "SENDER_COMPANY":      data.get("sender_company")   or os.environ.get("SENDER_COMPANY", ""),
         "EMAIL_SUBJECT":       data.get("email_subject")    or os.environ.get("EMAIL_SUBJECT", ""),
@@ -588,6 +601,8 @@ def api_spam_test():
     run_cfg = {
         "GROQ_API_KEY":     data.get("groq_key")         or os.environ.get("GROQ_API_KEY", ""),
         "EMAIL_SCRIPT_URL": data.get("email_script_url") or os.environ.get("EMAIL_SCRIPT_URL", ""),
+        "SMTP_EMAIL":       data.get("smtp_email")       or os.environ.get("SMTP_EMAIL", ""),
+        "SMTP_PASSWORD":    data.get("smtp_pass")        or os.environ.get("SMTP_PASSWORD", ""),
         "SENDER_NAME":      data.get("sender_name")      or os.environ.get("SENDER_NAME", ""),
         "SENDER_COMPANY":   data.get("sender_company")   or os.environ.get("SENDER_COMPANY", ""),
         "EMAIL_SUBJECT":    data.get("email_subject")    or os.environ.get("EMAIL_SUBJECT", ""),
@@ -603,29 +618,17 @@ def api_spam_test():
         "url":        "https://play.google.com/store/apps/details?id=com.example",
     }
     
-    # Use the first URL for spam test
-    raw_urls = get_cfg("EMAIL_SCRIPT_URL").replace(',', '\n').split('\n')
-    urls = [u.strip() for u in raw_urls if u.strip()]
-    url = urls[0] if urls else None
-    
-    if not url:
-        return jsonify({"error": "EMAIL_SCRIPT_URL not set"}), 400
     base_subject = get_cfg("EMAIL_SUBJECT") or DEFAULT_EMAIL_SUBJECT
     base_body    = get_cfg("EMAIL_BODY")    or DEFAULT_EMAIL_BODY
     subject, body = ai_gen_email(sample, base_subject, base_body)
-    try:
-        r = requests.post(url, json={"to": test_to, "subject": subject, "body": body}, timeout=30)
-        result = r.json() if r.text else {}
-        if result.get("status") == "ok":
-            return jsonify({"ok": True, "msg": f"Test sent to {test_to}", "subject": subject, "body": body})
-        return jsonify({"error": result.get("msg", "Failed")}), 500
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    
+    status, msg = send_email(sample, subject, body)
+    if status == "ok":
+        return jsonify({"ok": True, "msg": f"Test sent to {test_to}", "subject": subject, "body": body})
+    return jsonify({"error": msg}), 500
 
-# ── Sheet pending fetch ───────────────────────────────────────────────────────
 @application.route("/api/sheet_pending", methods=["POST"])
 def api_sheet_pending():
-    """Fetch leads from Sheet where Email Sent = No, return count + leads list."""
     data = request.get_json(silent=True) or {}
     sheet_url = data.get("sheet_url") or os.environ.get("APPS_SCRIPT_WEB_URL", "")
     if not sheet_url:
@@ -638,10 +641,8 @@ def api_sheet_pending():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ── Sheet ALL leads fetch (Database Sync) ─────────────────────────────────────
 @application.route("/api/sheet_all", methods=["POST"])
 def api_sheet_all():
-    """Fetch ALL leads from Sheet to populate the Database tab."""
     data = request.get_json(silent=True) or {}
     sheet_url = data.get("sheet_url") or os.environ.get("APPS_SCRIPT_WEB_URL", "")
     if not sheet_url:
