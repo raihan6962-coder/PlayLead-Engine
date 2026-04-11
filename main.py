@@ -507,144 +507,122 @@ def passes_filter(installs: int, score, ratings_count: int, hunter: dict) -> boo
 
 def scrape_keyword(keyword: str, original_keyword: str, hunter: dict = None) -> list:
     """
-    Scrape Google Play for one keyword.
+    Scrape Google Play for one keyword; return qualifying, non-duplicate leads.
 
-    KEY FIX — Keyword relevance enforcement:
-      After fetching app details, each app is checked for relevance to the
-      ORIGINAL keyword using token matching against title + genre + description.
-      Apps that don't match the original topic are excluded even if they pass
-      the install/rating filter.
+    Approach (from uploaded main.py) — DIRECT INLINE processing:
+      For each region, iterate search results immediately and fetch+process
+      each app on the spot. No two-phase collect-then-fetch — this matches
+      the uploaded main.py's proven flow that actually yields leads.
 
-    Strategy — COLLECT FIRST, FILTER LATER:
-      1. Run search() across all regions → collect every unique app_id
-      2. Fetch full details for each unseen app_id
-      3. Check keyword relevance against original_keyword tokens
-      4. Apply install/rating filter (passes_filter)
-      5. Extract email
-      6. Return only leads that pass ALL checks AND have an email
+    Additional features kept from current code:
+      - Keyword relevance check (is_keyword_relevant) against original_keyword
+      - Expanded region lists (SEARCH_COMBOS / HUNTER_SEARCH_COMBOS)
+      - n_hits=500 (from uploaded main.py)
+      - Detailed per-keyword stats log
     """
     global global_seen_ids, global_seen_emails
-    push_log(f"  Scraping keyword: '{keyword}'")
+    push_log(f"  Scraping: '{keyword}'")
 
-    # Pre-compute tokens from original keyword for relevance matching
+    # Pre-compute relevance tokens — original + current keyword merged
     original_tokens = build_keyword_tokens(original_keyword)
-    # Also build tokens from current keyword (catches synonyms)
     current_tokens  = build_keyword_tokens(keyword)
-    # Merge — app only needs to match EITHER original OR current keyword tokens
-    all_tokens = list(set(original_tokens + current_tokens))
+    all_tokens      = list(set(original_tokens + current_tokens))
 
-    # ── Step 1: Collect all unique app_ids from search results ────────────────
     combos = HUNTER_SEARCH_COMBOS if (hunter and hunter.get("active")) else SEARCH_COMBOS
-    candidate_ids = []
-    seen_in_step1 = set()
+
+    leads         = []
+    skipped_rel   = 0
+    skipped_fil   = 0
+    skipped_email = 0
 
     for lang, country in combos:
         if stop_event.is_set():
             break
         try:
-            results = search(keyword, lang=lang, country=country, n_hits=200)
+            results = search(keyword, lang=lang, country=country, n_hits=500)
         except Exception as e:
             push_log(f"    [{country}] search error: {e}")
             continue
 
-        new_in_country = 0
+        country_new = 0
         for item in results:
+            if stop_event.is_set():
+                break
+
             app_id = item.get("appId", "")
-            if not app_id:
+            # Skip if already processed in any previous keyword or this run
+            if not app_id or app_id in global_seen_ids:
                 continue
-            if app_id in global_seen_ids or app_id in seen_in_step1:
+
+            try:
+                details = gp_app(app_id, lang="en", country="us")
+            except Exception:
+                global_seen_ids.add(app_id)
                 continue
-            seen_in_step1.add(app_id)
-            candidate_ids.append(app_id)
-            new_in_country += 1
 
-        push_log(f"    [{country}] {new_in_country} new app_ids (total candidates: {len(candidate_ids)})")
-        if stop_event.wait(0.3):
-            break
+            app_title       = details.get("title", "")
+            app_description = details.get("description", "")
+            app_genre       = details.get("genre", "")
+            installs        = details.get("minInstalls") or 0
+            score           = details.get("score")
+            ratings_count   = details.get("ratings") or 0
 
-    if not candidate_ids:
-        push_log(f"  0 candidates found for '{keyword}'")
-        sheet_log_keyword(keyword, 0)
-        return []
+            # Mark seen immediately — prevents re-fetching across regions
+            global_seen_ids.add(app_id)
 
-    push_log(f"  Fetching details for {len(candidate_ids)} candidates …")
+            # ── Keyword relevance check ────────────────────────────────────────
+            if not is_keyword_relevant(app_title, app_description, app_genre,
+                                       original_keyword, all_tokens):
+                skipped_rel += 1
+                continue
 
-    # ── Step 2, 3, 4, 5: Fetch → relevance check → filter → email extract ────
-    leads = []
-    checked       = 0
-    skipped_rel   = 0  # skipped for keyword irrelevance
-    skipped_fil   = 0  # skipped for install/rating filter
-    skipped_email = 0  # skipped for no email
+            # ── Install / rating filter ────────────────────────────────────────
+            if not passes_filter(installs, score, ratings_count, hunter):
+                skipped_fil += 1
+                continue
 
-    for app_id in candidate_ids:
-        if stop_event.is_set():
-            break
+            # ── Email extraction ───────────────────────────────────────────────
+            email = (
+                extract_email(details.get("developerEmail", ""))
+                or extract_email(details.get("privacyPolicy", ""))
+                or extract_email(details.get("description", ""))
+                or extract_email(details.get("recentChanges", ""))
+            )
+            if not email or email in global_seen_emails:
+                skipped_email += 1
+                continue
 
-        checked += 1
-        global_seen_ids.add(app_id)
+            lead = {
+                "app_id":      app_id,
+                "app_name":    app_title,
+                "developer":   details.get("developer", ""),
+                "email":       email,
+                "category":    app_genre,
+                "installs":    installs,
+                "score":       score,
+                "ratings":     ratings_count,
+                "description": (app_description or "")[:300],
+                "url":         f"https://play.google.com/store/apps/details?id={app_id}",
+                "icon":        details.get("icon", ""),
+                "keyword":     keyword,
+                "scraped_at":  time.strftime("%Y-%m-%d %H:%M:%S"),
+                "email_sent":  False,
+            }
+            leads.append(lead)
+            global_seen_emails.add(email)
+            score_str = f"{score:.1f}★" if score else "new"
+            push_log(f"  ✔ {app_title} | {installs:,} inst | {score_str} | {email}")
+            country_new += 1
 
-        try:
-            details = gp_app(app_id, lang="en", country="us")
-        except Exception:
-            continue
+            if stop_event.wait(0.25):
+                break
 
-        app_title       = details.get("title", "")
-        app_description = details.get("description", "")
-        app_genre       = details.get("genre", "")
-        installs        = details.get("minInstalls") or 0
-        score           = details.get("score")
-        ratings_count   = details.get("ratings") or 0
-
-        # ── Keyword relevance check — CORE FIX ────────────────────────────────
-        # App must be related to the original keyword topic
-        if not is_keyword_relevant(app_title, app_description, app_genre,
-                                   original_keyword, all_tokens):
-            skipped_rel += 1
-            continue
-
-        # ── Install/rating filter ──────────────────────────────────────────────
-        if not passes_filter(installs, score, ratings_count, hunter):
-            skipped_fil += 1
-            continue
-
-        # ── Email extraction ───────────────────────────────────────────────────
-        email = (
-            extract_email(details.get("developerEmail", ""))
-            or extract_email(details.get("privacyPolicy", ""))
-            or extract_email(details.get("description", ""))
-            or extract_email(details.get("recentChanges", ""))
-        )
-        if not email or email in global_seen_emails:
-            skipped_email += 1
-            continue
-
-        lead = {
-            "app_id":      app_id,
-            "app_name":    app_title,
-            "developer":   details.get("developer", ""),
-            "email":       email,
-            "category":    app_genre,
-            "installs":    installs,
-            "score":       score,
-            "ratings":     ratings_count,
-            "description": (app_description or "")[:300],
-            "url":         f"https://play.google.com/store/apps/details?id={app_id}",
-            "icon":        details.get("icon", ""),
-            "keyword":     keyword,
-            "scraped_at":  time.strftime("%Y-%m-%d %H:%M:%S"),
-            "email_sent":  False,
-        }
-        leads.append(lead)
-        global_seen_emails.add(email)
-        score_str = f"{score:.1f}★" if score else "new"
-        push_log(f"  ✔ {app_title} | {installs:,} inst | {score_str} | {email}")
-
-        if stop_event.wait(0.2):
+        push_log(f"    [{country}] +{country_new} leads | total so far: {len(leads)}")
+        if stop_event.wait(0.5):
             break
 
     push_log(
-        f"  '{keyword}': checked={checked} | "
-        f"irrelevant={skipped_rel} | filtered={skipped_fil} | "
+        f"  '{keyword}': irrelevant={skipped_rel} | filtered={skipped_fil} | "
         f"no-email={skipped_email} | ✅ leads={len(leads)}"
     )
     sheet_log_keyword(keyword, len(leads))
