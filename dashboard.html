@@ -939,7 +939,7 @@ tbody tr:hover td { background: #13131c; }
       for (var i = 1; i < vals.length; i++) {
         var row = vals[i];
         var emailSent = String(row[colIdx["Email Sent"]] || "").trim().toLowerCase();
-        if (emailSent === "no" || emailSent === "") {
+        if (emailSent === "no" || emailSent === "" || emailSent === "pending") {
           leads.push({
             app_id:    String(row[colIdx["App ID"]]    || ""),
             app_name:  String(row[colIdx["App Name"]]  || ""),
@@ -977,10 +977,9 @@ tbody tr:hover td { background: #13131c; }
           score:     row[colIdx["Score"]] ? Number(row[colIdx["Score"]]) : null,
           url:       String(row[colIdx["URL"]]       || ""),
           keyword:   String(row[colIdx["Keyword"]]   || ""),
-          email_sent: (emailSent === "yes")
+          email_sent: (emailSent === "yes" || emailSent === "sent")
         });
       }
-      leads.reverse();
       return ContentService.createTextOutput(JSON.stringify({status:"ok", leads:leads})).setMimeType(ContentService.MimeType.JSON);
     }
 
@@ -1376,57 +1375,73 @@ async function stopAuto() {
 }
 
 // ════ SEND FROM HERE (per-row "Send" button) ════
-// ক্লিক করা app_id থেকে শুরু করে live Sheet এর সব pending lead
-// একটা একটা করে order অনুযায়ী automatically send হবে।
+// "Send" বাটন ক্লিক করলে:
+//   1. Live Sheet থেকে FRESH pending list নেয় (top-to-bottom order)
+//   2. ক্লিক করা app_id টা সেই list এ খোঁজে
+//   3. সেখান থেকে শুরু করে বাকি সব pending গুলো একটা একটা করে send করে
+//   4. Already "Yes" status এর কোনো lead কে কখনো include করে না
 async function sendSingleEmail(clickedAppId) {
   const sheetUrl = cfg.appsscript;
   if (!sheetUrl) { alert('Sheet URL not set in Setup & Config!'); return; }
 
-  // Step 1: Live Sheet থেকে fresh সব leads নাও (cached allLeads থেকে না)
-  let freshLeads = [];
+  // Step 1: Live Sheet থেকে ONLY pending leads নাও (top-to-bottom, "Yes" বাদ)
+  // /api/sheet_pending → Apps Script "get_pending" action use করে
+  // এটা শুধু emailSent === "" / "no" / "pending" গুলো return করে — "Yes" কখনো না
+  let allPending = [];
   try {
-    const r = await fetch('/api/sheet_all', {
+    const r = await fetch('/api/sheet_pending', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ sheet_url: sheetUrl })
     });
     const d = await r.json();
-    if (!r.ok || !d.ok) { alert('Sheet থেকে data নিতে পারছি না: ' + (d.error||'unknown')); return; }
-    freshLeads = d.leads || [];
+    if (!r.ok || !d.ok) { alert('Sheet থেকে pending list নিতে পারছি না: ' + (d.error||'unknown')); return; }
+    allPending = d.leads || [];
   } catch(e) { alert('Network error: ' + e.message); return; }
 
-  // Step 2: Live data দিয়ে table ও memory refresh করো
-  allLeads = freshLeads;
-  renderDB(allLeads);
-  renderAnalytics();
+  if (!allPending.length) { alert('✅ Sheet এ কোনো pending lead নেই — সব sent!'); return; }
 
-  // Step 3: ক্লিক করা app_id টা fresh list এ খোঁজো
-  const startIdx = freshLeads.findIndex(l => l.app_id === clickedAppId);
-  if (startIdx === -1) { alert('Lead টা sheet এ পাওয়া যাচ্ছে না। Sync করে আবার চেষ্টা করো।'); return; }
+  // Step 2: ক্লিক করা app_id টা pending list এ খোঁজো
+  const startIdx = allPending.findIndex(l => l.app_id === clickedAppId);
 
-  const clickedLead = freshLeads[startIdx];
-  if (clickedLead.email_sent) { alert('এই lead এ আগেই email পাঠানো হয়েছে।'); return; }
+  let pendingToSend = [];
+  if (startIdx === -1) {
+    // এই lead টা আর pending নেই (already sent বা removed) — সব pending পাঠাও
+    pendingToSend = allPending;
+  } else {
+    // এই lead থেকে শুরু করে বাকি সব pending
+    pendingToSend = allPending.slice(startIdx);
+  }
 
-  // Step 4: ক্লিক করা index থেকে শুরু করে নিচের সব pending lead বের করো (order ঠিক রেখে)
-  const pendingFromHere = freshLeads.slice(startIdx).filter(l => !l.email_sent && l.email);
+  if (!pendingToSend.length) { alert('এই position থেকে কোনো pending lead নেই।'); return; }
 
-  if (!pendingFromHere.length) { alert('এই position থেকে কোনো pending lead নেই।'); return; }
+  const firstName = pendingToSend[0].app_name || pendingToSend[0].email;
+  if (!confirm('📬 "' + firstName + '" থেকে শুরু করে মোট ' + pendingToSend.length + 'টা pending lead এ email পাঠাবো?\n\n(Already sent "Yes" leads skip হবে)')) return;
 
-  if (!confirm('📬 "' + clickedLead.app_name + '" থেকে শুরু করে মোট ' + pendingFromHere.length + 'টা pending lead এ email পাঠাবো?')) return;
+  // Step 3: Table refresh করো live data দিয়ে (UI sync)
+  try {
+    const r2 = await fetch('/api/sheet_all', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ sheet_url: sheetUrl })
+    });
+    const d2 = await r2.json();
+    if (d2.ok && d2.leads) { allLeads = d2.leads; renderDB(allLeads); renderAnalytics(); }
+  } catch(e) { /* UI refresh optional, continue anyway */ }
 
-  // Step 5: সব pending Send বাটন disable করো (double-send রোধ)
-  pendingFromHere.forEach(l => {
+  // Step 4: Send বাটনগুলো disable করো
+  pendingToSend.forEach(l => {
     const btn = document.getElementById('send-btn-' + l.app_id);
     if (btn) { btn.disabled = true; btn.textContent = '⏳…'; }
   });
+  document.getElementById('btnSendPending').disabled = true;
 
-  // Step 6: Backend এ পাঠাও — existing /api/send_pending route use করো
-  // এটা exactly এই list একটা একটা করে order মেনে send করবে
+  // Step 5: Backend এ পাঠাও — /api/send_pending একটা একটা করে order মেনে send করবে
+  // Backend নিজেই প্রতিটা lead send হলে sheet_mark_sent() call করে status "Yes" করে
   try {
     const r = await fetch('/api/send_pending', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        leads:                 pendingFromHere,
+        leads:                 pendingToSend,
         groq_key:              cfg.groq,
         email_script_url:      cfg.emailscript,
         sheet_url:             cfg.appsscript,
@@ -1441,20 +1456,23 @@ async function sendSingleEmail(clickedAppId) {
     const d = await r.json();
     if (!r.ok || !d.ok) {
       alert('Error: ' + (d.error || 'Unknown error'));
-      pendingFromHere.forEach(l => {
+      pendingToSend.forEach(l => {
         const btn = document.getElementById('send-btn-' + l.app_id);
         if (btn) { btn.disabled = false; btn.textContent = '📤 Send'; }
       });
+      document.getElementById('btnSendPending').disabled = false;
       return;
     }
-    // Polling শুরু করো — backend প্রতিটা email sent করলে status update হবে
+    // Polling শুরু — backend প্রতিটা email send করলে status update হয়
+    // renderSt() call হলে latest state দেখাবে
     startPoll();
   } catch(e) {
     alert('Network error: ' + e.message);
-    pendingFromHere.forEach(l => {
+    pendingToSend.forEach(l => {
       const btn = document.getElementById('send-btn-' + l.app_id);
       if (btn) { btn.disabled = false; btn.textContent = '📤 Send'; }
     });
+    document.getElementById('btnSendPending').disabled = false;
   }
 }
 
