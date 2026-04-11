@@ -95,6 +95,19 @@ body {
 }
 .btn-send-pending:hover { background: linear-gradient(135deg,#1e180d,#2a2410); border-color: var(--gold); }
 .btn-send-pending:disabled { opacity: .35; cursor: not-allowed; }
+.btn-send-row {
+  background: transparent;
+  border: 1px solid var(--gold);
+  color: var(--gold);
+  border-radius: 5px;
+  font-size: 10px;
+  padding: 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s, opacity .15s;
+}
+.btn-send-row:hover { background: rgba(212,175,55,.12); }
+.btn-send-row:disabled { opacity: .35; cursor: not-allowed; }
 .pending-badge {
   background: var(--gold); color: #0a0808;
   font-size: 10px; font-weight: 700; font-family: var(--mono);
@@ -650,9 +663,9 @@ tbody tr:hover td { background: #13131c; }
           <thead><tr>
             <th>#</th><th>App Name</th><th>Developer</th><th>Email</th>
             <th>Category</th><th>Installs</th><th>Score</th>
-            <th>Keyword</th><th>Status</th><th>Link</th>
+            <th>Keyword</th><th>Status</th><th>Link</th><th>Action</th>
           </tr></thead>
-          <tbody id="dbBody"><tr><td colspan="10"><div class="empty-st"><span class="empty-ico">🗄️</span>No leads yet.</div></td></tr></tbody>
+          <tbody id="dbBody"><tr><td colspan="11"><div class="empty-st"><span class="empty-ico">🗄️</span>No leads yet.</div></td></tr></tbody>
         </table>
       </div>
     </div>
@@ -1362,6 +1375,89 @@ async function stopAuto() {
   document.getElementById('btnStart').disabled = false;
 }
 
+// ════ SEND FROM HERE (per-row "Send" button) ════
+// ক্লিক করা app_id থেকে শুরু করে live Sheet এর সব pending lead
+// একটা একটা করে order অনুযায়ী automatically send হবে।
+async function sendSingleEmail(clickedAppId) {
+  const sheetUrl = cfg.appsscript;
+  if (!sheetUrl) { alert('Sheet URL not set in Setup & Config!'); return; }
+
+  // Step 1: Live Sheet থেকে fresh সব leads নাও (cached allLeads থেকে না)
+  let freshLeads = [];
+  try {
+    const r = await fetch('/api/sheet_all', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ sheet_url: sheetUrl })
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) { alert('Sheet থেকে data নিতে পারছি না: ' + (d.error||'unknown')); return; }
+    freshLeads = d.leads || [];
+  } catch(e) { alert('Network error: ' + e.message); return; }
+
+  // Step 2: Live data দিয়ে table ও memory refresh করো
+  allLeads = freshLeads;
+  renderDB(allLeads);
+  renderAnalytics();
+
+  // Step 3: ক্লিক করা app_id টা fresh list এ খোঁজো
+  const startIdx = freshLeads.findIndex(l => l.app_id === clickedAppId);
+  if (startIdx === -1) { alert('Lead টা sheet এ পাওয়া যাচ্ছে না। Sync করে আবার চেষ্টা করো।'); return; }
+
+  const clickedLead = freshLeads[startIdx];
+  if (clickedLead.email_sent) { alert('এই lead এ আগেই email পাঠানো হয়েছে।'); return; }
+
+  // Step 4: ক্লিক করা index থেকে শুরু করে নিচের সব pending lead বের করো (order ঠিক রেখে)
+  const pendingFromHere = freshLeads.slice(startIdx).filter(l => !l.email_sent && l.email);
+
+  if (!pendingFromHere.length) { alert('এই position থেকে কোনো pending lead নেই।'); return; }
+
+  if (!confirm('📬 "' + clickedLead.app_name + '" থেকে শুরু করে মোট ' + pendingFromHere.length + 'টা pending lead এ email পাঠাবো?')) return;
+
+  // Step 5: সব pending Send বাটন disable করো (double-send রোধ)
+  pendingFromHere.forEach(l => {
+    const btn = document.getElementById('send-btn-' + l.app_id);
+    if (btn) { btn.disabled = true; btn.textContent = '⏳…'; }
+  });
+
+  // Step 6: Backend এ পাঠাও — existing /api/send_pending route use করো
+  // এটা exactly এই list একটা একটা করে order মেনে send করবে
+  try {
+    const r = await fetch('/api/send_pending', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        leads:                 pendingFromHere,
+        groq_key:              cfg.groq,
+        email_script_url:      cfg.emailscript,
+        sheet_url:             cfg.appsscript,
+        sender_name:           cfg.sender_name || '',
+        sender_company:        cfg.sender_company || '',
+        new_app_email_subject: cfg.new_app_email_subject || DEFAULT_NEW_APP_SUBJECT,
+        new_app_email_body:    cfg.new_app_email_body    || DEFAULT_NEW_APP_BODY,
+        old_app_email_subject: cfg.old_app_email_subject || DEFAULT_OLD_APP_SUBJECT,
+        old_app_email_body:    cfg.old_app_email_body    || DEFAULT_OLD_APP_BODY,
+      })
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) {
+      alert('Error: ' + (d.error || 'Unknown error'));
+      pendingFromHere.forEach(l => {
+        const btn = document.getElementById('send-btn-' + l.app_id);
+        if (btn) { btn.disabled = false; btn.textContent = '📤 Send'; }
+      });
+      return;
+    }
+    // Polling শুরু করো — backend প্রতিটা email sent করলে status update হবে
+    startPoll();
+  } catch(e) {
+    alert('Network error: ' + e.message);
+    pendingFromHere.forEach(l => {
+      const btn = document.getElementById('send-btn-' + l.app_id);
+      if (btn) { btn.disabled = false; btn.textContent = '📤 Send'; }
+    });
+  }
+}
+
 async function sendPending() {
   const sheetUrl = cfg.appsscript;
   if (!sheetUrl) { alert('Sheet URL not set in Setup & Config!'); return; }
@@ -1530,9 +1626,9 @@ function renderDB(leads) {
   document.getElementById('dbCnt').textContent = leads.length;
   refreshDerived();
   const tbody = document.getElementById('dbBody');
-  if(!leads.length) { tbody.innerHTML=`<tr><td colspan="10"><div class="empty-st"><span class="empty-ico">🗄️</span>No leads yet.</div></td></tr>`; return; }
+  if(!leads.length) { tbody.innerHTML=`<tr><td colspan="11"><div class="empty-st"><span class="empty-ico">🗄️</span>No leads yet.</div></td></tr>`; return; }
   tbody.innerHTML = leads.map((l,i)=>`
-    <tr>
+    <tr id="lead-row-${esc(l.app_id)}">
       <td style="color:var(--slate2);font-family:var(--mono);font-size:10px">${i+1}</td>
       <td><div style="font-weight:600;color:var(--cream);max-width:150px;overflow:hidden;text-overflow:ellipsis">${esc(l.app_name||'')}</div></td>
       <td style="color:var(--slate);font-size:10.5px;max-width:110px;overflow:hidden;text-overflow:ellipsis">${esc(l.developer||'')}</td>
@@ -1541,8 +1637,12 @@ function renderDB(leads) {
       <td style="font-family:var(--mono);font-size:10.5px">${(l.installs||0).toLocaleString()}</td>
       <td style="font-family:var(--mono);font-size:10.5px">${l.score!=null?Number(l.score).toFixed(1):'new'}</td>
       <td style="color:var(--gold);font-size:10.5px">${esc(l.keyword||'')}</td>
-      <td>${l.email_sent?'<span class="bdg bdg-sent">✓ Sent</span>':'<span class="bdg bdg-pend">Pending</span>'}</td>
+      <td id="lead-status-${esc(l.app_id)}">${l.email_sent?'<span class="bdg bdg-sent">✓ Sent</span>':'<span class="bdg bdg-pend">Pending</span>'}</td>
       <td><a class="ext-a" href="${esc(l.url)}" target="_blank">↗</a></td>
+      <td>${l.email_sent
+        ? '<span style="color:var(--slate2);font-size:10px;">—</span>'
+        : `<button class="btn-send-row" id="send-btn-${esc(l.app_id)}" onclick="sendSingleEmail('${esc(l.app_id)}')" title="Send from here — এই lead থেকে সব pending পাঠাবে">📤 Send</button>`
+      }</td>
     </tr>`).join('');
 }
 
