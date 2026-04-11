@@ -896,27 +896,36 @@ tbody tr:hover td { background: #13131c; }
       sheet.appendRow(Object.values(row));
 
     } else if (action === "mark_sent") {
+      var appId = data.app_id;
+      // "All Leads" tab update
       var allSheet = ss.getSheetByName("All Leads");
       if (allSheet) {
-        var appId = data.app_id;
         var vals = allSheet.getDataRange().getValues();
-        for (var i = 1; i < vals.length; i++) {
-          if (String(vals[i][vals[i].length - 1]) === appId) {
-            var sentCol = vals[0].indexOf("Email Sent") + 1;
-            if (sentCol > 0) allSheet.getRange(i+1, sentCol).setValue("Yes");
-            break;
+        var headers = vals[0];
+        var appIdCol = headers.indexOf("App ID");
+        var sentCol  = headers.indexOf("Email Sent") + 1;
+        if (appIdCol >= 0 && sentCol > 0) {
+          for (var i = 1; i < vals.length; i++) {
+            if (String(vals[i][appIdCol]).trim() === String(appId).trim()) {
+              allSheet.getRange(i+1, sentCol).setValue("Yes");
+              break;
+            }
           }
         }
       }
+      // "Qualified Leads" tab update
       var qSheet = ss.getSheetByName("Qualified Leads");
       if (qSheet) {
-        var appId = data.app_id;
         var vals = qSheet.getDataRange().getValues();
-        for (var i = 1; i < vals.length; i++) {
-          if (String(vals[i][vals[i].length - 1]) === appId) {
-            var sentCol = vals[0].indexOf("Email Sent") + 1;
-            if (sentCol > 0) qSheet.getRange(i+1, sentCol).setValue("Yes");
-            break;
+        var headers = vals[0];
+        var appIdCol = headers.indexOf("App ID");
+        var sentCol  = headers.indexOf("Email Sent") + 1;
+        if (appIdCol >= 0 && sentCol > 0) {
+          for (var i = 1; i < vals.length; i++) {
+            if (String(vals[i][appIdCol]).trim() === String(appId).trim()) {
+              qSheet.getRange(i+1, sentCol).setValue("Yes");
+              break;
+            }
           }
         }
       }
