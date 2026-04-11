@@ -102,75 +102,69 @@ def ai_gen_keywords(original: str, used: list, hunter: dict = None) -> list:
         return _fallback_keywords(original, used)
 
     client = Groq(api_key=key)
-    is_hunter = hunter and hunter.get("active")
+    used_str = ", ".join(used[:30]) if used else "none"  # cap to avoid huge prompts
 
-    if is_hunter:
-        prompt = (
-            f"You are a Google Play Store keyword expert specializing in finding "
-            f"underperforming apps.\n"
-            f"Original keyword: '{original}'\n"
-            f"Already used: {', '.join(used) if used else 'none'}\n"
-            f"Generate 12 NEW diverse Play Store search keywords covering:\n"
-            f"- Direct synonyms and variations\n"
-            f"- Related niches and sub-categories\n"
-            f"- Competitor app types\n"
-            f"- Problem-based searches (e.g. 'fix', 'improve', 'track')\n"
-            f"- Combination keywords (e.g. 'free', 'lite', 'simple', 'pro')\n"
-            f"Return ONLY a JSON array of strings, nothing else. No duplicates."
-        )
-    else:
-        prompt = (
-            f"You are a Google Play Store keyword expert.\n"
-            f"Original keyword: '{original}'\n"
-            f"Already used: {', '.join(used) if used else 'none'}\n"
-            f"Generate 8 NEW semantically similar Play Store search keywords "
-            f"that would find small/new apps in the same niche. "
-            f"Return ONLY a JSON array of strings, nothing else."
-        )
+    prompt = (
+        f"You are a Google Play Store search expert.\n"
+        f"Goal: find keywords that return MANY apps in Google Play Store search results.\n"
+        f"Original topic: \"{original}\"\n"
+        f"Already used (skip these): {used_str}\n\n"
+        f"Generate 15 NEW search keywords. Rules:\n"
+        f"1. Each keyword must be something real users type in Play Store search\n"
+        f"2. Prefer BROAD terms over narrow ones — broader = more apps found\n"
+        f"3. Cover the full niche: tools, trackers, managers, viewers, converters, etc.\n"
+        f"4. Include single-word terms AND short 2-word phrases\n"
+        f"5. Think about RELATED categories that overlap with this niche\n"
+        f"6. Do NOT repeat any keyword from the already-used list\n"
+        f"Return ONLY a JSON array of strings. Example: [\"keyword1\", \"keyword2\"]"
+    )
     try:
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.9, max_tokens=400
+            temperature=0.85, max_tokens=500
         )
         raw = resp.choices[0].message.content.strip()
         raw = re.sub(r"```[a-z]*", "", raw).replace("```", "").strip()
         kws = json.loads(raw)
-        push_log(f"AI keywords: {kws}")
-        new_kws = [k for k in kws if k not in used]
-        # If AI returns nothing useful, also add fallback keywords
-        if len(new_kws) < 3:
-            push_log("AI returned few keywords — adding fallback expansion")
+        new_kws = [str(k).strip() for k in kws if str(k).strip() not in used]
+        push_log(f"  AI keywords ({len(new_kws)}): {new_kws}")
+        if len(new_kws) < 5:
+            push_log("  AI returned few keywords — adding built-in fallback")
             new_kws.extend(_fallback_keywords(original, used + new_kws))
         return new_kws
     except Exception as e:
-        push_log(f"AI keyword error: {e} — using built-in fallback")
+        push_log(f"  AI keyword error: {e} — using built-in fallback")
         return _fallback_keywords(original, used)
 
 
 def _fallback_keywords(original: str, used: list) -> list:
     """
-    Built-in keyword expansion — used when AI fails or returns too few results.
-    Generates suffix/prefix variants that reliably find different app sets.
+    Built-in keyword expansion — used when AI is unavailable or returns too few.
+    Generates suffix/prefix variants that reliably surface different app sets.
     """
     base = original.lower().strip()
     suffixes = [
         "app", "tool", "free", "lite", "simple", "easy", "best",
-        "tracker", "manager", "helper", "pro", "smart", "quick",
-        "mobile", "android", "online", "fast", "top", "new",
+        "tracker", "manager", "helper", "pro", "smart", "wallet",
+        "monitor", "converter", "viewer", "calculator", "scanner",
     ]
-    prefixes = ["free", "best", "simple", "easy", "smart", "quick", "top"]
+    prefixes = ["free", "best", "simple", "easy", "smart", "top", "crypto"]
     candidates = []
     for s in suffixes:
-        candidates.append(f"{base} {s}")
+        c = f"{base} {s}"
+        if c not in used:
+            candidates.append(c)
     for p in prefixes:
-        candidates.append(f"{p} {base}")
-    # Add word splits / recombinations if multi-word
+        c = f"{p} {base}"
+        if c not in used:
+            candidates.append(c)
     words = base.split()
     if len(words) > 1:
-        candidates.extend(words)          # individual words
-        candidates.append(" ".join(reversed(words)))  # reversed order
-    return [k for k in candidates if k not in used][:10]
+        for w in words:
+            if w not in used:
+                candidates.append(w)
+    return candidates[:12]
 
 # ── AI email generation per lead ──────────────────────────────────────────────
 def ai_gen_email(lead: dict, base_subject: str, base_body: str):
@@ -402,16 +396,15 @@ def fill_template(tpl: str, lead: dict) -> str:
 # ── Play Store scraper ────────────────────────────────────────────────────────
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
-# Normal mode search regions
+# Search regions — stable English-language markets with good Play Store coverage
 SEARCH_COMBOS = [
-    ("en", "us"), ("en", "gb"), ("en", "in"), ("en", "au"), ("en", "ca"),
+    ("en", "us"), ("en", "gb"), ("en", "au"), ("en", "ca"), ("en", "nz"),
 ]
 
-# Hunter mode — broader region coverage for maximum app discovery
+# Hunter mode — expanded but only reliable markets (no errors, stable API)
 HUNTER_SEARCH_COMBOS = [
-    ("en", "us"), ("en", "gb"), ("en", "in"), ("en", "au"), ("en", "ca"),
-    ("en", "ng"), ("en", "za"), ("en", "ph"), ("en", "pk"), ("en", "bd"),
-    ("en", "ke"), ("en", "gh"), ("en", "nz"), ("en", "sg"), ("en", "ie"),
+    ("en", "us"), ("en", "gb"), ("en", "au"), ("en", "ca"), ("en", "nz"),
+    ("en", "sg"), ("en", "za"), ("en", "ng"), ("en", "gh"), ("en", "ie"),
 ]
 
 def extract_email(text):
@@ -460,86 +453,117 @@ def passes_filter(installs: int, score, ratings_count: int, hunter: dict) -> boo
     return True
 
 def scrape_keyword(keyword: str, hunter: dict = None) -> list:
-    """Scrape Google Play for one keyword; return qualifying, non-duplicate leads."""
-    global global_seen_ids, global_seen_emails
-    push_log(f"Scraping: '{keyword}'")
-    leads = []
+    """
+    Scrape Google Play for one keyword.
 
-    # Hunter mode uses broader region set for maximum discovery
+    Strategy — COLLECT FIRST, FILTER LATER:
+      1. Run search() across all regions → collect every unique app_id
+      2. Fetch full details for each unseen app_id
+      3. Apply filter (passes_filter) AFTER fetching details
+      4. Extract email from developer contact fields
+      5. Return only leads that pass filter AND have an email
+
+    This way no app is skipped at the search stage — we see the full
+    Play Store result set before any filtering happens.
+    """
+    global global_seen_ids, global_seen_emails
+    push_log(f"  Scraping keyword: '{keyword}'")
+
+    # ── Step 1: Collect all unique app_ids from search results ────────────────
     combos = HUNTER_SEARCH_COMBOS if (hunter and hunter.get("active")) else SEARCH_COMBOS
+    candidate_ids = []          # ordered, deduped list of unseen app_ids
+    seen_in_step1 = set()       # local dedup within this keyword run
+
     for lang, country in combos:
         if stop_event.is_set():
             break
         try:
-            results = search(keyword, lang=lang, country=country, n_hits=500)
+            results = search(keyword, lang=lang, country=country, n_hits=200)
         except Exception as e:
-            push_log(f"  Search error ({country}): {e}")
+            push_log(f"    [{country}] search error: {e}")
             continue
 
+        new_in_country = 0
         for item in results:
-            if stop_event.is_set():
-                break
-
             app_id = item.get("appId", "")
-            # DUPLICATE PREVENTION: skip if app_id was seen in any previous keyword
-            if not app_id or app_id in global_seen_ids:
+            if not app_id:
                 continue
-
-            try:
-                details = gp_app(app_id, lang="en", country="us")
-            except Exception:
-                global_seen_ids.add(app_id)
+            if app_id in global_seen_ids or app_id in seen_in_step1:
                 continue
+            seen_in_step1.add(app_id)
+            candidate_ids.append(app_id)
+            new_in_country += 1
 
-            installs      = details.get("minInstalls") or 0
-            score         = details.get("score")
-            ratings_count = details.get("ratings") or 0  # total review count
-
-            if not passes_filter(installs, score, ratings_count, hunter):
-                global_seen_ids.add(app_id)
-                continue
-
-            email = (
-                extract_email(details.get("developerEmail", ""))
-                or extract_email(details.get("privacyPolicy", ""))
-                or extract_email(details.get("description", ""))
-                or extract_email(details.get("recentChanges", ""))
-            )
-            # DUPLICATE PREVENTION: skip if email already collected
-            if not email or email in global_seen_emails:
-                global_seen_ids.add(app_id)
-                continue
-
-            lead = {
-                "app_id":      app_id,
-                "app_name":    details.get("title", ""),
-                "developer":   details.get("developer", ""),
-                "email":       email,
-                "category":    details.get("genre", ""),
-                "installs":    installs,
-                "score":       score,
-                "ratings":     ratings_count,
-                "description": (details.get("description") or "")[:300],
-                "url":         f"https://play.google.com/store/apps/details?id={app_id}",
-                "icon":        details.get("icon", ""),
-                "keyword":     keyword,
-                "scraped_at":  time.strftime("%Y-%m-%d %H:%M:%S"),
-                "email_sent":  False,
-            }
-            leads.append(lead)
-            global_seen_ids.add(app_id)
-            global_seen_emails.add(email)
-            score_str = f"{score:.1f}★" if score else "new"
-            push_log(f"  OK {lead['app_name']} | {installs:,} installs | {score_str} | {email}")
-
-            if stop_event.wait(0.25):
-                break
-
-        push_log(f"  [{country}] done. Leads so far: {len(leads)}")
-        if stop_event.wait(0.5):
+        push_log(f"    [{country}] {new_in_country} new app_ids (total candidates: {len(candidate_ids)})")
+        if stop_event.wait(0.3):
             break
 
-    push_log(f"  {len(leads)} new leads from '{keyword}'")
+    if not candidate_ids:
+        push_log(f"  0 candidates found for '{keyword}'")
+        sheet_log_keyword(keyword, 0)
+        return []
+
+    push_log(f"  Fetching details for {len(candidate_ids)} candidates …")
+
+    # ── Step 2 & 3: Fetch details + apply filter + extract email ─────────────
+    leads = []
+    checked = 0
+
+    for app_id in candidate_ids:
+        if stop_event.is_set():
+            break
+
+        checked += 1
+        global_seen_ids.add(app_id)   # mark as seen regardless of outcome
+
+        try:
+            details = gp_app(app_id, lang="en", country="us")
+        except Exception:
+            continue
+
+        installs      = details.get("minInstalls") or 0
+        score         = details.get("score")
+        ratings_count = details.get("ratings") or 0
+
+        # Apply filter — strict requirements unchanged
+        if not passes_filter(installs, score, ratings_count, hunter):
+            continue
+
+        # Extract email from all available fields
+        email = (
+            extract_email(details.get("developerEmail", ""))
+            or extract_email(details.get("privacyPolicy", ""))
+            or extract_email(details.get("description", ""))
+            or extract_email(details.get("recentChanges", ""))
+        )
+        if not email or email in global_seen_emails:
+            continue
+
+        lead = {
+            "app_id":      app_id,
+            "app_name":    details.get("title", ""),
+            "developer":   details.get("developer", ""),
+            "email":       email,
+            "category":    details.get("genre", ""),
+            "installs":    installs,
+            "score":       score,
+            "ratings":     ratings_count,
+            "description": (details.get("description") or "")[:300],
+            "url":         f"https://play.google.com/store/apps/details?id={app_id}",
+            "icon":        details.get("icon", ""),
+            "keyword":     keyword,
+            "scraped_at":  time.strftime("%Y-%m-%d %H:%M:%S"),
+            "email_sent":  False,
+        }
+        leads.append(lead)
+        global_seen_emails.add(email)
+        score_str = f"{score:.1f}★" if score else "new"
+        push_log(f"  ✔ {lead['app_name']} | {installs:,} inst | {score_str} | {email}")
+
+        if stop_event.wait(0.2):
+            break
+
+    push_log(f"  '{keyword}': checked {checked} apps → {len(leads)} leads qualify")
     sheet_log_keyword(keyword, len(leads))
     return leads
 
