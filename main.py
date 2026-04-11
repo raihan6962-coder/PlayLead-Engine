@@ -81,7 +81,8 @@ def sheet_append_qualified(lead: dict):
     }})
 
 def sheet_mark_sent(app_id: str, email: str, app_name: str):
-    sheet_post({"action": "mark_sent", "app_id": app_id})
+    # Pass both app_id AND email so Apps Script can match by either field
+    sheet_post({"action": "mark_sent", "app_id": app_id, "email": email, "app_name": app_name})
     sheet_post({"action": "append", "tab": "Email Sent", "row": {
         "App ID": app_id, "App Name": app_name,
         "Email": email, "Sent At": time.strftime("%Y-%m-%d %H:%M:%S"),
