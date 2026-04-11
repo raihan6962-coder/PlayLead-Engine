@@ -1646,17 +1646,6 @@ async function runSpamTest() {
   btn.disabled = false; btn.textContent = '📤 Send Test Email';
 }
 
-// ════ LIVE PREVIEW ════
-function fillTpl(tpl, lead) {
-  return tpl
-    .replace(/{{app_name}}/g,       lead.app_name||'')
-    .replace(/{{developer}}/g,      lead.developer||'')
-    .replace(/{{category}}/g,       lead.category||'')
-    .replace(/{{installs}}/g,       String(lead.installs||''))
-    .replace(/{{score}}/g,          String(lead.score||''))
-    .replace(/{{url}}/g,            lead.url||'')
-    .replace(/{{sender_name}}/g,    cfg.sender_name||'Your Name')
-    .replace(/{{sender_company}}/g, cfg.sender_company||'Your Company');
 // ════ SCORE FORMATTING (mirrors Python format_score) ════
 function formatScore(score) {
   if (score === null || score === undefined || score === '' || score === 0) return '';
