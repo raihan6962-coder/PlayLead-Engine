@@ -22,14 +22,13 @@ state = {
 }
 
 # ── Global duplicate tracker — persists across runs until clear ───────────────
-# Uses app_id as the primary unique key (most reliable dedup identifier)
 global_seen_ids: set = set()
 global_seen_emails: set = set()
 
 # ── Email cooldown state ──────────────────────────────────────────────────────
 email_state_lock = threading.Lock()
-email_url_quotas: dict = {}          # url -> {"exhausted": bool, "failed": bool}
-global_cooldown_until: float = 0.0  # epoch seconds; 0 = no cooldown active
+email_url_quotas: dict = {}
+global_cooldown_until: float = 0.0
 cooldown_retry_thread = None
 cooldown_retry_cancel = threading.Event()
 
@@ -123,20 +122,177 @@ def ai_gen_keywords(original: str, used: list) -> list:
         push_log(f"AI keyword error: {e}")
         return []
 
+# ── Dual-template defaults ────────────────────────────────────────────────────
+# NEW APP template — used when lead has NO rating/score
+DEFAULT_NEW_APP_SUBJECT = "Quick question about {{app_name}}"
+DEFAULT_NEW_APP_BODY = """Hi {{developer}} team,
+
+I came across {{app_name}} on Google Play — it looks like a brand new app in the {{category}} space, which is exciting!
+
+I run a Play Store growth service that helps new apps like yours build early traction, get their first reviews, and establish credibility fast.
+
+Would you be open to a quick 15-minute chat this week?
+
+Best regards,
+{{sender_name}}
+{{sender_company}}
+
+App: {{url}}"""
+
+# OLD APP template — used when lead HAS a rating/score
+DEFAULT_OLD_APP_SUBJECT = "Quick question about {{app_name}}"
+DEFAULT_OLD_APP_BODY = """Hi {{developer}} team,
+
+I came across {{app_name}} on Google Play — currently sitting at {{score}} stars with {{installs}} installs in the {{category}} category.
+
+I run a Play Store review recovery service that helps developers like you quickly clean up rating issues, respond to bad reviews professionally, and protect your app's reputation before it affects growth.
+
+Would you be open to a quick 15-minute chat this week?
+
+Best regards,
+{{sender_name}}
+{{sender_company}}
+
+App: {{url}}"""
+
+# Legacy aliases — kept for backwards compatibility
+DEFAULT_EMAIL_SUBJECT = DEFAULT_OLD_APP_SUBJECT
+DEFAULT_EMAIL_BODY    = DEFAULT_OLD_APP_BODY
+
+
+# ── Template engine helpers ───────────────────────────────────────────────────
+
+def format_score(score) -> str:
+    """
+    Convert raw score to 1-decimal rounded string.
+    Returns "" for None / 0 / empty / non-numeric.
+      1.222222 → "1.2"
+      4.98765  → "5.0"
+      None     → ""
+    """
+    if score is None or score == "" or score == 0:
+        return ""
+    try:
+        val = float(score)
+        if val <= 0:
+            return ""
+        return f"{val:.1f}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def has_rating(lead: dict) -> bool:
+    """Return True only when lead has a real score > 0."""
+    score = lead.get("score")
+    if score is None or score == "":
+        return False
+    try:
+        return float(score) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def select_template(lead: dict) -> tuple:
+    """
+    Pick the correct subject + body pair based on whether the lead has a rating.
+      No rating  →  NEW APP template
+      Has rating →  OLD APP template
+
+    Config priority: run_cfg key → env var → built-in default
+    """
+    if has_rating(lead):
+        subject = (
+            get_cfg("OLD_APP_EMAIL_SUBJECT")
+            or get_cfg("EMAIL_SUBJECT")
+            or DEFAULT_OLD_APP_SUBJECT
+        )
+        body = (
+            get_cfg("OLD_APP_EMAIL_BODY")
+            or get_cfg("EMAIL_BODY")
+            or DEFAULT_OLD_APP_BODY
+        )
+    else:
+        subject = (
+            get_cfg("NEW_APP_EMAIL_SUBJECT")
+            or DEFAULT_NEW_APP_SUBJECT
+        )
+        body = (
+            get_cfg("NEW_APP_EMAIL_BODY")
+            or DEFAULT_NEW_APP_BODY
+        )
+    return subject, body
+
+
+def personalize_template(tpl: str, lead: dict) -> str:
+    """
+    Replace all {{variable}} placeholders with real lead data.
+    Every placeholder is always replaced — none survive in output.
+
+    Supported variables:
+        {{app_name}}, {{developer}}, {{category}},
+        {{score}}, {{installs}}, {{url}},
+        {{sender_name}}, {{sender_company}}
+    """
+    sender_name    = get_cfg("SENDER_NAME", "Your Name")
+    sender_company = get_cfg("SENDER_COMPANY", "Your Company")
+
+    score_fmt = format_score(lead.get("score"))
+
+    installs_raw = lead.get("installs")
+    if installs_raw:
+        try:
+            installs_str = f"{int(installs_raw):,}"
+        except (TypeError, ValueError):
+            installs_str = str(installs_raw)
+    else:
+        installs_str = "growing app"
+
+    return (tpl
+        .replace("{{app_name}}",       lead.get("app_name", ""))
+        .replace("{{developer}}",      lead.get("developer", ""))
+        .replace("{{category}}",       lead.get("category", "") or "")
+        .replace("{{score}}",          score_fmt)
+        .replace("{{installs}}",       installs_str)
+        .replace("{{url}}",            lead.get("url", ""))
+        .replace("{{sender_name}}",    sender_name)
+        .replace("{{sender_company}}", sender_company)
+    )
+
+
+def fill_template(tpl: str, lead: dict) -> str:
+    """Backwards-compatible wrapper — delegates to personalize_template."""
+    return personalize_template(tpl, lead)
+
+
 # ── AI email generation per lead ──────────────────────────────────────────────
-def ai_gen_email(lead: dict, base_subject: str, base_body: str):
+def ai_gen_email(lead: dict, base_subject: str = None, base_body: str = None):
+    """
+    Generate a personalized email for one lead.
+    Auto-selects NEW APP or OLD APP template based on rating presence.
+    Score is always formatted to 1 decimal before injection.
+    """
+    if base_subject is None or base_body is None:
+        auto_subject, auto_body = select_template(lead)
+        base_subject = base_subject or auto_subject
+        base_body    = base_body    or auto_body
+
     key = get_cfg("GROQ_API_KEY")
     sender_name    = get_cfg("SENDER_NAME", "Your Name")
     sender_company = get_cfg("SENDER_COMPANY", "Your Company")
 
+    score_fmt    = format_score(lead.get("score"))
+    score_info   = f"{score_fmt} stars" if score_fmt else "no ratings yet (brand new app)"
+    install_info = f"{lead['installs']:,} installs" if lead.get("installs") else "just launched"
+    template_type = "OLD APP (has rating)" if has_rating(lead) else "NEW APP (no rating)"
+
     if not key:
-        return fill_template(base_subject, lead), fill_template(base_body, lead)
+        return personalize_template(base_subject, lead), personalize_template(base_body, lead)
 
     client = Groq(api_key=key)
-    score_info   = f"{lead['score']:.1f} stars" if lead.get("score") else "no ratings yet (brand new)"
-    install_info = f"{lead['installs']:,} installs" if lead.get("installs") else "just launched"
 
     prompt = f"""You are a cold email personalizer. Your only job is to fill in the base template with the real app details — keeping the structure and wording almost identical.
+
+TEMPLATE TYPE: {template_type}
 
 BASE TEMPLATE (follow this EXACTLY):
 Subject: {base_subject}
@@ -146,7 +302,7 @@ Body:
 APP DETAILS:
 - App Name: {lead.get('app_name', '')}
 - Developer: {lead.get('developer', '')}
-- Category: {lead.get('category', '')}
+- Category: {lead.get('category', '') or 'App'}
 - Installs: {install_info}
 - Rating: {score_info}
 - Play Store URL: {lead.get('url', '')}
@@ -157,12 +313,13 @@ SENDER:
 
 STRICT RULES:
 1. Copy the template EXACTLY — same structure, same sentences, same flow
-2. Only replace placeholder values (app name, developer name, installs, rating, url) with the real app details above
-3. You may change at most 2-3 words in the entire body to naturally fit this specific app — nothing more
-4. Do NOT rewrite sentences, do NOT add new sentences, do NOT remove any sentences
+2. Only replace placeholder values with the real app details above
+3. You may change at most 2-3 words in the entire body — nothing more
+4. Do NOT rewrite sentences, add new sentences, or remove any sentences
 5. Do NOT change the greeting format, CTA, or sign-off
-6. CRITICAL: Preserve every line break and blank line from the template exactly as-is. Use \\n for newlines inside the JSON string.
-7. Return ONLY valid JSON: {{"subject": "...", "body": "..."}}
+6. Preserve every line break and blank line exactly as-is. Use \\n for newlines in JSON.
+7. NEVER leave any {{{{variable}}}} placeholders in the output — replace all of them.
+8. Return ONLY valid JSON: {{"subject": "...", "body": "..."}}
 No markdown, no explanation, just the JSON object."""
 
     try:
@@ -174,43 +331,16 @@ No markdown, no explanation, just the JSON object."""
         raw = resp.choices[0].message.content.strip()
         raw = re.sub(r"```[a-z]*", "", raw).replace("```", "").strip()
         data = json.loads(raw)
-        subject = data.get("subject") or fill_template(base_subject, lead)
-        body    = data.get("body")    or fill_template(base_body, lead)
+        subject = data.get("subject") or personalize_template(base_subject, lead)
+        body    = data.get("body")    or personalize_template(base_body, lead)
         body = body.replace("\\n", "\n")
+        # Safety pass — ensure no raw placeholders survived AI output
+        subject = personalize_template(subject, lead)
+        body    = personalize_template(body, lead)
         return subject, body
     except Exception as e:
         push_log(f"  AI email error (using template fallback): {e}")
-        return fill_template(base_subject, lead), fill_template(base_body, lead)
-
-# ── Template fill ─────────────────────────────────────────────────────────────
-DEFAULT_EMAIL_SUBJECT = "Quick question about {{app_name}}"
-DEFAULT_EMAIL_BODY = """Hi {{developer}} team,
-
-I came across {{app_name}} on Google Play and noticed it's getting some negative reviews lately — which is really common for newer apps still finding their audience.
-
-I run a Play Store review recovery service that helps developers like you quickly clean up rating issues, respond to bad reviews professionally, and protect your app's reputation.
-
-Would you be open to a quick 15-minute chat this week?
-
-Best regards,
-{{sender_name}}
-{{sender_company}}
-
-App: {{url}}"""
-
-def fill_template(tpl: str, lead: dict) -> str:
-    sender_name    = get_cfg("SENDER_NAME", "Your Name")
-    sender_company = get_cfg("SENDER_COMPANY", "Your Company")
-    return (tpl
-        .replace("{{app_name}}",       lead.get("app_name", ""))
-        .replace("{{developer}}",      lead.get("developer", ""))
-        .replace("{{category}}",       lead.get("category", ""))
-        .replace("{{installs}}",       str(lead.get("installs", "")))
-        .replace("{{score}}",          str(lead.get("score", "") or "N/A"))
-        .replace("{{url}}",            lead.get("url", ""))
-        .replace("{{sender_name}}",    sender_name)
-        .replace("{{sender_company}}", sender_company)
-    )
+        return personalize_template(base_subject, lead), personalize_template(base_body, lead)
 
 # ── Play Store scraper ────────────────────────────────────────────────────────
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
@@ -227,37 +357,28 @@ def extract_email(text):
 
 def passes_filter(installs: int, score, ratings_count: int, hunter: dict) -> bool:
     """
-    Filter logic for both Normal Mode and Hunter Mode.
-
-    Hunter Mode strict rules (only weak-performing EXISTING apps):
-      - Must have at least 1 review (ratings_count > 0)
-      - Rating must be > 0 AND <= max_score (user input)
-      - Installs must be <= max_installs (user input)
-      - EXCLUDES: apps with 0 reviews, 0 rating, brand-new apps with no data
+    Hunter Mode: only weak-performing EXISTING apps.
+      - ratings_count >= 1 (must have reviews)
+      - score > 0 AND <= max_score
+      - installs <= max_installs
 
     Normal Mode:
       - installs <= 10,000
-      - score <= 3.5 OR no score yet (new apps are OK in normal mode)
+      - score <= 3.5 OR no score (new apps allowed)
     """
     if hunter and hunter.get("active"):
         max_inst  = int(hunter.get("max_installs") or 5000)
         max_score = float(hunter.get("max_score") or 2.5)
-
-        # Must have at least 1 real review
         if not ratings_count or ratings_count < 1:
             return False
-        # Rating must exist and be > 0
         if not score or score <= 0:
             return False
-        # Rating must not exceed user's threshold
         if score > max_score:
             return False
-        # Installs must be within user's threshold
         if installs > max_inst:
             return False
         return True
 
-    # Normal Mode — new apps (no score) are allowed; cap on installs + bad ratings
     if installs > 10_000:
         return False
     if score is not None and score > 3.5:
@@ -284,7 +405,6 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
                 break
 
             app_id = item.get("appId", "")
-            # DUPLICATE PREVENTION: skip if app_id was seen in any previous keyword
             if not app_id or app_id in global_seen_ids:
                 continue
 
@@ -296,7 +416,7 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
 
             installs      = details.get("minInstalls") or 0
             score         = details.get("score")
-            ratings_count = details.get("ratings") or 0  # total review count
+            ratings_count = details.get("ratings") or 0
 
             if not passes_filter(installs, score, ratings_count, hunter):
                 global_seen_ids.add(app_id)
@@ -308,7 +428,6 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
                 or extract_email(details.get("description", ""))
                 or extract_email(details.get("recentChanges", ""))
             )
-            # DUPLICATE PREVENTION: skip if email already collected
             if not email or email in global_seen_emails:
                 global_seen_ids.add(app_id)
                 continue
@@ -352,7 +471,6 @@ def get_email_urls() -> list:
     return [u.strip() for u in raw if u.strip()]
 
 def reset_email_quotas(urls: list):
-    """Reset all URL quota state at the start of each run."""
     with email_state_lock:
         global email_url_quotas
         email_url_quotas = {u: {"exhausted": False, "failed": False} for u in urls}
@@ -372,7 +490,6 @@ def all_urls_exhausted(urls: list) -> bool:
         return all(email_url_quotas.get(u, {}).get("exhausted", False) for u in urls)
 
 def reset_exhausted_urls(urls: list):
-    """Clear quota flags after cooldown so retry can attempt sending again."""
     with email_state_lock:
         for u in urls:
             if u in email_url_quotas:
@@ -381,7 +498,7 @@ def reset_exhausted_urls(urls: list):
 # ── Email send (quota-aware, multi-URL) ──────────────────────────────────────
 def send_email(lead: dict, subject: str, body: str):
     """
-    Try each URL in order, skipping ones already marked exhausted.
+    Try each URL in order, skipping exhausted ones.
     Returns: ("ok","") | ("quota","All URLs exhausted") | ("error","...")
     """
     urls = get_email_urls()
@@ -449,27 +566,25 @@ def _is_automation_running() -> bool:
         return state.get("running", False)
 
 def _cancel_cooldown_retry():
-    """Signal any active cooldown retry thread to stop."""
     global cooldown_retry_thread
     cooldown_retry_cancel.set()
     cooldown_retry_thread = None
 
-def _schedule_email_retry(leads_to_send: list, base_subject: str, base_body: str):
+def _schedule_email_retry(leads_to_send: list, base_subject=None, base_body=None):
     """
     Background retry thread:
-      1. Waits COOLDOWN_SECONDS (1 hour), waking every second to check for cancel.
-      2. If cancel signal received (manual task started) → exit silently.
-      3. After cooldown, if another automation is running → skip retry.
-      4. Attempt to send remaining leads.
-      5. If quota still exhausted → re-enter another cooldown cycle.
+      1. Waits 1 hour (cancellable per second).
+      2. Skips if another automation started during cooldown.
+      3. Retries remaining leads with per-lead template selection.
+      4. Re-enters cooldown if still exhausted.
     """
-    global global_cooldown_until
+    global global_cooldown_until, cooldown_retry_thread
 
     cooldown_retry_cancel.clear()
     with email_state_lock:
         global_cooldown_until = time.time() + COOLDOWN_SECONDS
 
-    push_log(f"  Email cooldown started. Will retry in 1 hour.")
+    push_log("  Email cooldown started. Will retry in 1 hour.")
 
     for _ in range(COOLDOWN_SECONDS):
         if cooldown_retry_cancel.is_set():
@@ -495,7 +610,13 @@ def _schedule_email_retry(leads_to_send: list, base_subject: str, base_body: str
         if stop_event.is_set() or cooldown_retry_cancel.is_set():
             break
 
-        subject, body = ai_gen_email(lead, base_subject, base_body)
+        # Per-lead dual-template selection
+        if base_subject is not None and base_body is not None:
+            lead_subject, lead_body = base_subject, base_body
+        else:
+            lead_subject, lead_body = select_template(lead)
+
+        subject, body = ai_gen_email(lead, lead_subject, lead_body)
         status, _ = send_email(lead, subject, body)
 
         if status == "ok":
@@ -505,8 +626,6 @@ def _schedule_email_retry(leads_to_send: list, base_subject: str, base_body: str
                 state["emails_sent"] = state.get("emails_sent", 0) + 1
         elif status == "quota":
             push_log(f"  Limits still exhausted. Re-entering cooldown for {len(leads_to_send) - i} remaining leads…")
-            # Re-schedule for the remaining unsent leads
-            global cooldown_retry_thread
             cooldown_retry_thread = threading.Thread(
                 target=_schedule_email_retry,
                 args=(leads_to_send[i:], base_subject, base_body),
@@ -526,10 +645,10 @@ def _schedule_email_retry(leads_to_send: list, base_subject: str, base_body: str
     push_log(f"  Retry complete. {sent} additional emails sent.")
 
 # ── Email sending loop ────────────────────────────────────────────────────────
-def email_loop(leads: list, base_subject: str, base_body: str):
+def email_loop(leads: list, base_subject: str = None, base_body: str = None):
     """
-    Iterate leads and send emails.
-    On global quota exhaustion: queue remaining leads and start cooldown retry thread.
+    Iterate leads and send emails with per-lead template selection.
+    On quota exhaustion: queue remaining leads into cooldown retry thread.
     """
     global cooldown_retry_thread
 
@@ -538,8 +657,15 @@ def email_loop(leads: list, base_subject: str, base_body: str):
             push_log("Stopped during email phase.")
             return
 
-        push_log(f"  AI writing email for {lead['app_name']} …")
-        subject, body = ai_gen_email(lead, base_subject, base_body)
+        # Per-lead template selection
+        if base_subject is not None and base_body is not None:
+            lead_subject, lead_body = base_subject, base_body
+        else:
+            lead_subject, lead_body = select_template(lead)
+
+        template_label = "rated-app template" if has_rating(lead) else "new-app template"
+        push_log(f"  AI writing email for {lead['app_name']} [{template_label}] …")
+        subject, body = ai_gen_email(lead, lead_subject, lead_body)
 
         status, _ = send_email(lead, subject, body)
 
@@ -551,7 +677,6 @@ def email_loop(leads: list, base_subject: str, base_body: str):
             sheet_mark_sent(lead["app_id"], lead["email"], lead["app_name"])
 
         elif status == "quota":
-            # All URLs exhausted — hand off remaining leads to the retry scheduler
             remaining = leads[i:]
             push_log(f"  All email quotas exhausted. {len(remaining)} leads queued for 1-hour retry.")
             cooldown_retry_thread = threading.Thread(
@@ -578,7 +703,6 @@ def email_loop(leads: list, base_subject: str, base_body: str):
 def run_automation(initial_kw: str, target: int, hunter: dict = None):
     global cooldown_retry_thread
 
-    # Cancel pending cooldown retry before starting fresh
     if cooldown_retry_thread and cooldown_retry_thread.is_alive():
         _cancel_cooldown_retry()
         push_log("  Cancelled pending email retry (new automation starting).")
@@ -589,9 +713,6 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
 
     mode = "Hunter" if (hunter and hunter.get("active")) else "Normal"
     push_log(f"Started | kw='{initial_kw}' | target={target} | mode={mode}")
-
-    base_subject = get_cfg("EMAIL_SUBJECT") or DEFAULT_EMAIL_SUBJECT
-    base_body    = get_cfg("EMAIL_BODY")    or DEFAULT_EMAIL_BODY
 
     urls = get_email_urls()
     reset_email_quotas(urls)
@@ -634,7 +755,7 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
 
     # ── Phase 2: AI Email + Send ──────────────────────────────────────────────
     upd(phase="emailing")
-    email_loop(all_leads, base_subject, base_body)
+    email_loop(all_leads)
 
     if stop_event.is_set():
         upd(running=False, phase="stopped")
@@ -646,7 +767,6 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
 def run_send_pending(leads: list):
     global cooldown_retry_thread
 
-    # Cancel pending cooldown retry before starting manual send
     if cooldown_retry_thread and cooldown_retry_thread.is_alive():
         _cancel_cooldown_retry()
         push_log("  Cancelled pending email retry (manual send starting).")
@@ -655,13 +775,10 @@ def run_send_pending(leads: list):
     stop_event.clear()
     push_log(f"Sending pending: {len(leads)} leads")
 
-    base_subject = get_cfg("EMAIL_SUBJECT") or DEFAULT_EMAIL_SUBJECT
-    base_body    = get_cfg("EMAIL_BODY")    or DEFAULT_EMAIL_BODY
-
     urls = get_email_urls()
     reset_email_quotas(urls)
 
-    email_loop(leads, base_subject, base_body)
+    email_loop(leads)
 
     push_log("Pending send complete.")
     upd(running=False, phase="done")
@@ -682,13 +799,20 @@ def api_start():
             return jsonify({"error": "Already running"}), 409
     global run_cfg
     run_cfg = {
-        "GROQ_API_KEY":        data.get("groq_key")         or os.environ.get("GROQ_API_KEY", ""),
-        "APPS_SCRIPT_WEB_URL": data.get("sheet_url")        or os.environ.get("APPS_SCRIPT_WEB_URL", ""),
-        "EMAIL_SCRIPT_URL":    data.get("email_script_url") or os.environ.get("EMAIL_SCRIPT_URL", ""),
-        "SENDER_NAME":         data.get("sender_name")      or os.environ.get("SENDER_NAME", ""),
-        "SENDER_COMPANY":      data.get("sender_company")   or os.environ.get("SENDER_COMPANY", ""),
-        "EMAIL_SUBJECT":       data.get("email_subject")    or os.environ.get("EMAIL_SUBJECT", ""),
-        "EMAIL_BODY":          data.get("email_body")       or os.environ.get("EMAIL_BODY", ""),
+        "GROQ_API_KEY":          data.get("groq_key")             or os.environ.get("GROQ_API_KEY", ""),
+        "APPS_SCRIPT_WEB_URL":   data.get("sheet_url")            or os.environ.get("APPS_SCRIPT_WEB_URL", ""),
+        "EMAIL_SCRIPT_URL":      data.get("email_script_url")     or os.environ.get("EMAIL_SCRIPT_URL", ""),
+        "SENDER_NAME":           data.get("sender_name")          or os.environ.get("SENDER_NAME", ""),
+        "SENDER_COMPANY":        data.get("sender_company")       or os.environ.get("SENDER_COMPANY", ""),
+        # Legacy single-template (OLD APP fallback)
+        "EMAIL_SUBJECT":         data.get("email_subject")        or os.environ.get("EMAIL_SUBJECT", ""),
+        "EMAIL_BODY":            data.get("email_body")           or os.environ.get("EMAIL_BODY", ""),
+        # Dual-template — OLD APP (rated apps)
+        "OLD_APP_EMAIL_SUBJECT": data.get("old_app_email_subject") or os.environ.get("OLD_APP_EMAIL_SUBJECT", ""),
+        "OLD_APP_EMAIL_BODY":    data.get("old_app_email_body")    or os.environ.get("OLD_APP_EMAIL_BODY", ""),
+        # Dual-template — NEW APP (no rating)
+        "NEW_APP_EMAIL_SUBJECT": data.get("new_app_email_subject") or os.environ.get("NEW_APP_EMAIL_SUBJECT", ""),
+        "NEW_APP_EMAIL_BODY":    data.get("new_app_email_body")    or os.environ.get("NEW_APP_EMAIL_BODY", ""),
     }
     target = int(data.get("target") or os.environ.get("TARGET_LEADS", 300))
     hunter = data.get("hunter") or {}
@@ -697,12 +821,7 @@ def api_start():
 
 @application.route("/api/stop", methods=["POST"])
 def api_stop():
-    """
-    Instant stop: sets stop_event immediately.
-    All loops check stop_event at every iteration and on every wait(),
-    so they halt at the next checkpoint with no long blocking delays.
-    Also cancels any pending cooldown retry.
-    """
+    """Instant stop — sets event immediately, cancels cooldown retry."""
     stop_event.set()
     _cancel_cooldown_retry()
     upd(running=False, phase="stopped")
@@ -749,13 +868,17 @@ def api_send_pending():
         return jsonify({"error": "No leads provided"}), 400
     global run_cfg
     run_cfg = {
-        "GROQ_API_KEY":        data.get("groq_key")         or os.environ.get("GROQ_API_KEY", ""),
-        "EMAIL_SCRIPT_URL":    data.get("email_script_url") or os.environ.get("EMAIL_SCRIPT_URL", ""),
-        "SENDER_NAME":         data.get("sender_name")      or os.environ.get("SENDER_NAME", ""),
-        "SENDER_COMPANY":      data.get("sender_company")   or os.environ.get("SENDER_COMPANY", ""),
-        "EMAIL_SUBJECT":       data.get("email_subject")    or os.environ.get("EMAIL_SUBJECT", ""),
-        "EMAIL_BODY":          data.get("email_body")       or os.environ.get("EMAIL_BODY", ""),
-        "APPS_SCRIPT_WEB_URL": data.get("sheet_url")        or os.environ.get("APPS_SCRIPT_WEB_URL", ""),
+        "GROQ_API_KEY":          data.get("groq_key")             or os.environ.get("GROQ_API_KEY", ""),
+        "EMAIL_SCRIPT_URL":      data.get("email_script_url")     or os.environ.get("EMAIL_SCRIPT_URL", ""),
+        "SENDER_NAME":           data.get("sender_name")          or os.environ.get("SENDER_NAME", ""),
+        "SENDER_COMPANY":        data.get("sender_company")       or os.environ.get("SENDER_COMPANY", ""),
+        "APPS_SCRIPT_WEB_URL":   data.get("sheet_url")            or os.environ.get("APPS_SCRIPT_WEB_URL", ""),
+        "EMAIL_SUBJECT":         data.get("email_subject")        or os.environ.get("EMAIL_SUBJECT", ""),
+        "EMAIL_BODY":            data.get("email_body")           or os.environ.get("EMAIL_BODY", ""),
+        "OLD_APP_EMAIL_SUBJECT": data.get("old_app_email_subject") or os.environ.get("OLD_APP_EMAIL_SUBJECT", ""),
+        "OLD_APP_EMAIL_BODY":    data.get("old_app_email_body")    or os.environ.get("OLD_APP_EMAIL_BODY", ""),
+        "NEW_APP_EMAIL_SUBJECT": data.get("new_app_email_subject") or os.environ.get("NEW_APP_EMAIL_SUBJECT", ""),
+        "NEW_APP_EMAIL_BODY":    data.get("new_app_email_body")    or os.environ.get("NEW_APP_EMAIL_BODY", ""),
     }
     threading.Thread(target=run_send_pending, args=(leads,), daemon=True).start()
     return jsonify({"ok": True, "count": len(leads)})
