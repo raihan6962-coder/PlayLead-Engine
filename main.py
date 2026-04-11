@@ -999,6 +999,74 @@ def api_sheet_all():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@application.route("/api/send_single", methods=["POST"])
+def api_send_single():
+    """
+    Send email to exactly one specific lead identified by app_id.
+    Accepts the full lead object from the frontend so no sheet lookup is needed.
+    Updates only that lead's email_sent status — no other records are touched.
+    """
+    with state_lock:
+        if state["running"]:
+            return jsonify({"error": "Automation is running"}), 409
+
+    data = request.get_json(silent=True) or {}
+    lead = data.get("lead")
+    if not lead or not lead.get("app_id") or not lead.get("email"):
+        return jsonify({"error": "Valid lead with app_id and email required"}), 400
+
+    global run_cfg
+    run_cfg = {
+        "GROQ_API_KEY":          data.get("groq_key")             or os.environ.get("GROQ_API_KEY", ""),
+        "EMAIL_SCRIPT_URL":      data.get("email_script_url")     or os.environ.get("EMAIL_SCRIPT_URL", ""),
+        "SENDER_NAME":           data.get("sender_name")          or os.environ.get("SENDER_NAME", ""),
+        "SENDER_COMPANY":        data.get("sender_company")       or os.environ.get("SENDER_COMPANY", ""),
+        "EMAIL_SUBJECT":         data.get("email_subject")        or os.environ.get("EMAIL_SUBJECT", ""),
+        "EMAIL_BODY":            data.get("email_body")           or os.environ.get("EMAIL_BODY", ""),
+        "NEW_APP_EMAIL_SUBJECT": data.get("new_app_email_subject") or os.environ.get("NEW_APP_EMAIL_SUBJECT", ""),
+        "NEW_APP_EMAIL_BODY":    data.get("new_app_email_body")    or os.environ.get("NEW_APP_EMAIL_BODY", ""),
+        "OLD_APP_EMAIL_SUBJECT": data.get("old_app_email_subject") or os.environ.get("OLD_APP_EMAIL_SUBJECT", ""),
+        "OLD_APP_EMAIL_BODY":    data.get("old_app_email_body")    or os.environ.get("OLD_APP_EMAIL_BODY", ""),
+        "APPS_SCRIPT_WEB_URL":   data.get("sheet_url")            or os.environ.get("APPS_SCRIPT_WEB_URL", ""),
+    }
+
+    def _send_single_lead(lead_data: dict):
+        upd(running=True, phase="emailing")
+        stop_event.clear()
+        push_log(f"Manual send: {lead_data['app_name']} <{lead_data['email']}>")
+
+        urls = get_email_urls()
+        reset_email_quotas(urls)
+
+        base_subject = get_cfg("EMAIL_SUBJECT") or ""
+        base_body    = get_cfg("EMAIL_BODY")    or ""
+
+        push_log(f"  AI writing email for {lead_data['app_name']} … [{'OLD APP' if format_score(lead_data.get('score')) else 'NEW APP'} template]")
+        subject, body = ai_gen_email(lead_data, base_subject, base_body)
+
+        status, _ = send_email(lead_data, subject, body)
+
+        if status == "ok":
+            # Update only this specific lead in global state by matching app_id
+            with state_lock:
+                for l in state.get("leads", []):
+                    if l.get("app_id") == lead_data["app_id"]:
+                        l["email_sent"] = True
+                        break
+                state["emails_sent"] = state.get("emails_sent", 0) + 1
+            sheet_mark_sent(lead_data["app_id"], lead_data["email"], lead_data["app_name"])
+            push_log(f"  ✅ Manual send complete: {lead_data['email']}")
+        elif status == "quota":
+            push_log(f"  ⚠️ Quota exhausted — could not send to {lead_data['email']}")
+        else:
+            push_log(f"  ❌ Send failed for {lead_data['email']}")
+
+        upd(running=False, phase="done")
+
+    threading.Thread(target=_send_single_lead, args=(lead,), daemon=True).start()
+    return jsonify({"ok": True, "app_id": lead["app_id"], "email": lead["email"]})
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     application.run(host="0.0.0.0", port=port, debug=False)
