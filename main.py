@@ -96,28 +96,54 @@ def sheet_log_keyword(keyword: str, count: int):
 
 # ── AI keyword generation ─────────────────────────────────────────────────────
 def ai_gen_keywords(original: str, used: list, hunter: dict = None) -> list:
+    """
+    Generate search keywords for Play Store scraping.
+
+    Hunter Mode goal: find NICHE, LOW-COMPETITION keywords that surface
+    small/obscure apps — NOT popular broad terms like "finance app" which
+    only return giant apps (Revolut, CoinBase etc) that fail the filter.
+
+    Normal Mode: semantically similar keywords in the same niche.
+    """
     key = get_cfg("GROQ_API_KEY")
     if not key:
         push_log("GROQ_API_KEY not set — using built-in keyword expansion")
         return _fallback_keywords(original, used)
 
     client = Groq(api_key=key)
-    used_str = ", ".join(used[:30]) if used else "none"  # cap to avoid huge prompts
+    used_str = ", ".join(used[:30]) if used else "none"
+    is_hunter = bool(hunter and hunter.get("active"))
 
-    prompt = (
-        f"You are a Google Play Store search expert.\n"
-        f"Goal: find keywords that return MANY apps in Google Play Store search results.\n"
-        f"Original topic: \"{original}\"\n"
-        f"Already used (skip these): {used_str}\n\n"
-        f"Generate 15 NEW search keywords. Rules:\n"
-        f"1. Each keyword must be something real users type in Play Store search\n"
-        f"2. Prefer BROAD terms over narrow ones — broader = more apps found\n"
-        f"3. Cover the full niche: tools, trackers, managers, viewers, converters, etc.\n"
-        f"4. Include single-word terms AND short 2-word phrases\n"
-        f"5. Think about RELATED categories that overlap with this niche\n"
-        f"6. Do NOT repeat any keyword from the already-used list\n"
-        f"Return ONLY a JSON array of strings. Example: [\"keyword1\", \"keyword2\"]"
-    )
+    if is_hunter:
+        max_inst  = int(hunter.get("max_installs") or 5000)
+        max_score = float(hunter.get("max_score") or 2.5)
+        prompt = (
+            f"You are a Google Play Store keyword expert.\n"
+            f"Topic: \"{original}\"\n"
+            f"Already used (DO NOT repeat): {used_str}\n\n"
+            f"GOAL: Find keywords that surface SMALL, NICHE, OBSCURE apps — "
+            f"apps with fewer than {max_inst:,} installs and rating below {max_score}.\n\n"
+            f"RULES:\n"
+            f"1. Generate 15 SPECIFIC, NICHE keyword phrases (2-4 words each)\n"
+            f"2. Target sub-niches, specialized tools, regional variants, indie apps\n"
+            f"3. Think: what would a developer of a SMALL indie app in this space title it?\n"
+            f"4. Include: niche sub-features, specific use-cases, developer-style names\n"
+            f"5. AVOID generic popular terms like 'best', 'top', 'free' as the main word\n"
+            f"6. Examples of GOOD niche keywords: 'offline ledger tracker', "
+            f"'p2p payment lite', 'micro lending app', 'community wallet'\n"
+            f"7. Do NOT repeat anything from the already-used list\n"
+            f"Return ONLY a JSON array of strings. No explanation."
+        )
+    else:
+        prompt = (
+            f"You are a Google Play Store keyword expert.\n"
+            f"Original keyword: '{original}'\n"
+            f"Already used: {used_str}\n"
+            f"Generate 10 NEW semantically similar Play Store search keywords "
+            f"that would find small/new apps in the same niche. "
+            f"Return ONLY a JSON array of strings, nothing else."
+        )
+
     try:
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -129,7 +155,7 @@ def ai_gen_keywords(original: str, used: list, hunter: dict = None) -> list:
         kws = json.loads(raw)
         new_kws = [str(k).strip() for k in kws if str(k).strip() not in used]
         push_log(f"  AI keywords ({len(new_kws)}): {new_kws}")
-        if len(new_kws) < 5:
+        if len(new_kws) < 4:
             push_log("  AI returned few keywords — adding built-in fallback")
             new_kws.extend(_fallback_keywords(original, used + new_kws))
         return new_kws
@@ -140,16 +166,19 @@ def ai_gen_keywords(original: str, used: list, hunter: dict = None) -> list:
 
 def _fallback_keywords(original: str, used: list) -> list:
     """
-    Built-in keyword expansion — used when AI is unavailable or returns too few.
-    Generates suffix/prefix variants that reliably surface different app sets.
+    Built-in keyword expansion — deterministic, no AI needed.
+    Generates specific suffix/prefix variants that surface different
+    (typically smaller, niche) app sets vs the original keyword.
     """
     base = original.lower().strip()
+    # Niche-flavored suffixes — these tend to find smaller, indie apps
     suffixes = [
-        "app", "tool", "free", "lite", "simple", "easy", "best",
-        "tracker", "manager", "helper", "pro", "smart", "wallet",
-        "monitor", "converter", "viewer", "calculator", "scanner",
+        "lite", "simple", "basic", "mini", "micro",
+        "offline", "local", "community", "indie", "startup",
+        "tracker", "logger", "monitor", "ledger", "dashboard",
+        "tool", "helper", "assistant", "companion", "utility",
     ]
-    prefixes = ["free", "best", "simple", "easy", "smart", "top", "crypto"]
+    prefixes = ["simple", "easy", "offline", "local", "micro", "indie", "basic"]
     candidates = []
     for s in suffixes:
         c = f"{base} {s}"
@@ -159,10 +188,11 @@ def _fallback_keywords(original: str, used: list) -> list:
         c = f"{p} {base}"
         if c not in used:
             candidates.append(c)
+    # Split multi-word keywords into components — often finds sub-niche apps
     words = base.split()
     if len(words) > 1:
         for w in words:
-            if w not in used:
+            if len(w) > 3 and w not in used:
                 candidates.append(w)
     return candidates[:12]
 
@@ -401,10 +431,10 @@ SEARCH_COMBOS = [
     ("en", "us"), ("en", "gb"), ("en", "au"), ("en", "ca"), ("en", "nz"),
 ]
 
-# Hunter mode — expanded but only reliable markets (no errors, stable API)
+# Hunter mode — reliable markets only (ie/pk/bd/in removed — cause API errors)
 HUNTER_SEARCH_COMBOS = [
     ("en", "us"), ("en", "gb"), ("en", "au"), ("en", "ca"), ("en", "nz"),
-    ("en", "sg"), ("en", "za"), ("en", "ng"), ("en", "gh"), ("en", "ie"),
+    ("en", "sg"), ("en", "za"), ("en", "ng"), ("en", "gh"),
 ]
 
 def extract_email(text):
@@ -833,14 +863,9 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
     kw_queue  = [initial_kw]
     is_hunter = bool(hunter and hunter.get("active"))
 
-    # Hunter mode: track consecutive empty rounds to trigger filter relaxation
-    empty_rounds     = 0       # consecutive keywords that returned 0 leads
-    ai_refill_count  = 0       # how many times we asked AI for more keywords
-    MAX_EMPTY_ROUNDS = 3       # after this many dry keywords → expand aggressively
-    MAX_AI_REFILLS   = 20      # hard cap on AI calls to prevent infinite loop
-    # Relaxed hunter filter thresholds (applied after MAX_EMPTY_ROUNDS)
-    relaxed_max_installs = None
-    relaxed_max_score    = None
+    empty_rounds    = 0   # consecutive keywords returning 0 leads
+    ai_refill_count = 0   # number of AI keyword refill calls made
+    MAX_AI_REFILLS  = 20  # hard cap to prevent runaway loops
 
     # ── Phase 1: Scrape ───────────────────────────────────────────────────────
     while len(all_leads) < target and not stop_event.is_set():
@@ -848,12 +873,11 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
         # ── Refill keyword queue when empty ───────────────────────────────────
         if not kw_queue:
             if ai_refill_count >= MAX_AI_REFILLS:
-                push_log(f"⚠️ Reached AI refill limit ({MAX_AI_REFILLS}). "
+                push_log(f"⚠️ Reached keyword expansion limit ({MAX_AI_REFILLS} attempts). "
                          f"Collected {len(all_leads)}/{target} leads.")
                 break
 
-            push_log(f"🔄 Keyword queue empty — requesting AI expansion "
-                     f"(attempt {ai_refill_count + 1})…")
+            push_log(f"🔄 Expanding keywords (attempt {ai_refill_count + 1}) …")
             new_kws = ai_gen_keywords(initial_kw, kws_used, hunter)
             ai_refill_count += 1
 
@@ -861,8 +885,8 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
                 kw_queue.extend(new_kws)
                 push_log(f"  Added {len(new_kws)} new keywords to queue.")
             else:
-                # AI and fallback both dry — generate suffix variants of used kws
-                push_log("  AI + fallback exhausted — generating suffix variants…")
+                # AI dry — generate suffix variants from recently used keywords
+                push_log("  Generating suffix variants from recent keywords …")
                 base_pool = kws_used[-5:] if len(kws_used) > 5 else kws_used
                 for base in base_pool:
                     variants = _fallback_keywords(base, kws_used + kw_queue)
@@ -871,41 +895,18 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
                     push_log("❌ No more keywords possible. Stopping scrape.")
                     break
 
-        # ── Apply adaptive filter relaxation in Hunter Mode ───────────────────
-        # After many consecutive dry runs, loosen filters to capture more leads
-        active_hunter = dict(hunter) if is_hunter and hunter else None
-        if is_hunter and active_hunter and empty_rounds >= MAX_EMPTY_ROUNDS:
-            orig_inst  = int(hunter.get("max_installs") or 5000)
-            orig_score = float(hunter.get("max_score") or 2.5)
-
-            # Progressive relaxation: +50% installs, +0.5 score per relaxation round
-            relax_steps = max(1, empty_rounds - MAX_EMPTY_ROUNDS + 1)
-            relaxed_inst  = min(orig_inst  * (1 + 0.5 * relax_steps), 50_000)
-            relaxed_score = min(orig_score + 0.5 * relax_steps, 4.0)
-
-            if (relaxed_inst  != relaxed_max_installs or
-                    relaxed_score != relaxed_max_score):
-                relaxed_max_installs = relaxed_inst
-                relaxed_max_score    = relaxed_score
-                push_log(f"  🔓 Filter relaxed → max_installs={int(relaxed_inst):,} "
-                         f"max_score={relaxed_score:.1f} "
-                         f"(original: {orig_inst:,} / {orig_score:.1f})")
-
-            active_hunter = dict(hunter)
-            active_hunter["max_installs"] = int(relaxed_inst)
-            active_hunter["max_score"]    = relaxed_score
-
         # ── Process next keyword ───────────────────────────────────────────────
         kw = kw_queue.pop(0)
         if kw in kws_used:
-            continue           # already processed — skip silently
+            continue           # already processed — skip
         kws_used.append(kw)
         upd(keywords_used=kws_used[:], phase="scraping")
 
         remaining = target - len(all_leads)
         push_log(f"🔍 Searching: '{kw}' | Need {remaining} more leads …")
 
-        batch = scrape_keyword(kw, active_hunter if is_hunter else hunter)
+        # Filter is ALWAYS the user's original settings — never relaxed
+        batch = scrape_keyword(kw, hunter)
         all_leads.extend(batch)
         upd(leads_found=len(all_leads), leads=[l.copy() for l in all_leads])
 
@@ -914,21 +915,18 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
             sheet_append_qualified(lead)
 
         if batch:
-            empty_rounds = 0    # reset dry-run counter on any success
+            empty_rounds = 0
             push_log(f"  ✅ +{len(batch)} leads | Total: {len(all_leads)} / {target}")
         else:
             empty_rounds += 1
             push_log(f"  ⚠️ No leads from '{kw}' "
-                     f"({empty_rounds} consecutive dry run(s)) | "
+                     f"({empty_rounds} dry run(s)) | "
                      f"Total: {len(all_leads)} / {target}")
-            if is_hunter and empty_rounds >= MAX_EMPTY_ROUNDS:
-                push_log(f"  🔄 {MAX_EMPTY_ROUNDS} dry runs — expanding search …")
 
-        # ── Progress check ─────────────────────────────────────────────────────
         if len(all_leads) >= target:
-            push_log(f"🎯 Target reached! {len(all_leads)} / {target} leads collected.")
-        elif len(all_leads) < target and not kw_queue:
-            push_log(f"  📊 {len(all_leads)}/{target} — continuing to expand search …")
+            push_log(f"🎯 Target reached! {len(all_leads)} / {target}")
+        elif not kw_queue:
+            push_log(f"  📊 {len(all_leads)}/{target} — fetching more keywords …")
 
     if stop_event.is_set():
         push_log("Stopped during scraping.")
