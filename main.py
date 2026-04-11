@@ -95,34 +95,82 @@ def sheet_log_keyword(keyword: str, count: int):
     }})
 
 # ── AI keyword generation ─────────────────────────────────────────────────────
-def ai_gen_keywords(original: str, used: list) -> list:
+def ai_gen_keywords(original: str, used: list, hunter: dict = None) -> list:
     key = get_cfg("GROQ_API_KEY")
     if not key:
-        push_log("GROQ_API_KEY not set")
-        return []
+        push_log("GROQ_API_KEY not set — using built-in keyword expansion")
+        return _fallback_keywords(original, used)
+
     client = Groq(api_key=key)
-    prompt = (
-        f"You are a Google Play Store keyword expert.\n"
-        f"Original keyword: '{original}'\n"
-        f"Already used: {', '.join(used) if used else 'none'}\n"
-        f"Generate 8 NEW semantically similar Play Store search keywords "
-        f"that would find small/new apps in the same niche. "
-        f"Return ONLY a JSON array of strings, nothing else."
-    )
+    is_hunter = hunter and hunter.get("active")
+
+    if is_hunter:
+        prompt = (
+            f"You are a Google Play Store keyword expert specializing in finding "
+            f"underperforming apps.\n"
+            f"Original keyword: '{original}'\n"
+            f"Already used: {', '.join(used) if used else 'none'}\n"
+            f"Generate 12 NEW diverse Play Store search keywords covering:\n"
+            f"- Direct synonyms and variations\n"
+            f"- Related niches and sub-categories\n"
+            f"- Competitor app types\n"
+            f"- Problem-based searches (e.g. 'fix', 'improve', 'track')\n"
+            f"- Combination keywords (e.g. 'free', 'lite', 'simple', 'pro')\n"
+            f"Return ONLY a JSON array of strings, nothing else. No duplicates."
+        )
+    else:
+        prompt = (
+            f"You are a Google Play Store keyword expert.\n"
+            f"Original keyword: '{original}'\n"
+            f"Already used: {', '.join(used) if used else 'none'}\n"
+            f"Generate 8 NEW semantically similar Play Store search keywords "
+            f"that would find small/new apps in the same niche. "
+            f"Return ONLY a JSON array of strings, nothing else."
+        )
     try:
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.8, max_tokens=300
+            temperature=0.9, max_tokens=400
         )
         raw = resp.choices[0].message.content.strip()
         raw = re.sub(r"```[a-z]*", "", raw).replace("```", "").strip()
         kws = json.loads(raw)
         push_log(f"AI keywords: {kws}")
-        return [k for k in kws if k not in used]
+        new_kws = [k for k in kws if k not in used]
+        # If AI returns nothing useful, also add fallback keywords
+        if len(new_kws) < 3:
+            push_log("AI returned few keywords — adding fallback expansion")
+            new_kws.extend(_fallback_keywords(original, used + new_kws))
+        return new_kws
     except Exception as e:
-        push_log(f"AI keyword error: {e}")
-        return []
+        push_log(f"AI keyword error: {e} — using built-in fallback")
+        return _fallback_keywords(original, used)
+
+
+def _fallback_keywords(original: str, used: list) -> list:
+    """
+    Built-in keyword expansion — used when AI fails or returns too few results.
+    Generates suffix/prefix variants that reliably find different app sets.
+    """
+    base = original.lower().strip()
+    suffixes = [
+        "app", "tool", "free", "lite", "simple", "easy", "best",
+        "tracker", "manager", "helper", "pro", "smart", "quick",
+        "mobile", "android", "online", "fast", "top", "new",
+    ]
+    prefixes = ["free", "best", "simple", "easy", "smart", "quick", "top"]
+    candidates = []
+    for s in suffixes:
+        candidates.append(f"{base} {s}")
+    for p in prefixes:
+        candidates.append(f"{p} {base}")
+    # Add word splits / recombinations if multi-word
+    words = base.split()
+    if len(words) > 1:
+        candidates.extend(words)          # individual words
+        candidates.append(" ".join(reversed(words)))  # reversed order
+    return [k for k in candidates if k not in used][:10]
 
 # ── AI email generation per lead ──────────────────────────────────────────────
 def ai_gen_email(lead: dict, base_subject: str, base_body: str):
@@ -354,8 +402,16 @@ def fill_template(tpl: str, lead: dict) -> str:
 # ── Play Store scraper ────────────────────────────────────────────────────────
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
+# Normal mode search regions
 SEARCH_COMBOS = [
     ("en", "us"), ("en", "gb"), ("en", "in"), ("en", "au"), ("en", "ca"),
+]
+
+# Hunter mode — broader region coverage for maximum app discovery
+HUNTER_SEARCH_COMBOS = [
+    ("en", "us"), ("en", "gb"), ("en", "in"), ("en", "au"), ("en", "ca"),
+    ("en", "ng"), ("en", "za"), ("en", "ph"), ("en", "pk"), ("en", "bd"),
+    ("en", "ke"), ("en", "gh"), ("en", "nz"), ("en", "sg"), ("en", "ie"),
 ]
 
 def extract_email(text):
@@ -409,7 +465,9 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
     push_log(f"Scraping: '{keyword}'")
     leads = []
 
-    for lang, country in SEARCH_COMBOS:
+    # Hunter mode uses broader region set for maximum discovery
+    combos = HUNTER_SEARCH_COMBOS if (hunter and hunter.get("active")) else SEARCH_COMBOS
+    for lang, country in combos:
         if stop_event.is_set():
             break
         try:
@@ -749,23 +807,81 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
     all_leads = []
     kws_used  = [initial_kw]
     kw_queue  = [initial_kw]
+    is_hunter = bool(hunter and hunter.get("active"))
+
+    # Hunter mode: track consecutive empty rounds to trigger filter relaxation
+    empty_rounds     = 0       # consecutive keywords that returned 0 leads
+    ai_refill_count  = 0       # how many times we asked AI for more keywords
+    MAX_EMPTY_ROUNDS = 3       # after this many dry keywords → expand aggressively
+    MAX_AI_REFILLS   = 20      # hard cap on AI calls to prevent infinite loop
+    # Relaxed hunter filter thresholds (applied after MAX_EMPTY_ROUNDS)
+    relaxed_max_installs = None
+    relaxed_max_score    = None
 
     # ── Phase 1: Scrape ───────────────────────────────────────────────────────
     while len(all_leads) < target and not stop_event.is_set():
-        if not kw_queue:
-            push_log("Requesting AI keywords …")
-            new_kws = ai_gen_keywords(initial_kw, kws_used)
-            if not new_kws:
-                push_log("No more keywords. Stopping scrape.")
-                break
-            kw_queue.extend(new_kws)
 
+        # ── Refill keyword queue when empty ───────────────────────────────────
+        if not kw_queue:
+            if ai_refill_count >= MAX_AI_REFILLS:
+                push_log(f"⚠️ Reached AI refill limit ({MAX_AI_REFILLS}). "
+                         f"Collected {len(all_leads)}/{target} leads.")
+                break
+
+            push_log(f"🔄 Keyword queue empty — requesting AI expansion "
+                     f"(attempt {ai_refill_count + 1})…")
+            new_kws = ai_gen_keywords(initial_kw, kws_used, hunter)
+            ai_refill_count += 1
+
+            if new_kws:
+                kw_queue.extend(new_kws)
+                push_log(f"  Added {len(new_kws)} new keywords to queue.")
+            else:
+                # AI and fallback both dry — generate suffix variants of used kws
+                push_log("  AI + fallback exhausted — generating suffix variants…")
+                base_pool = kws_used[-5:] if len(kws_used) > 5 else kws_used
+                for base in base_pool:
+                    variants = _fallback_keywords(base, kws_used + kw_queue)
+                    kw_queue.extend(variants[:3])
+                if not kw_queue:
+                    push_log("❌ No more keywords possible. Stopping scrape.")
+                    break
+
+        # ── Apply adaptive filter relaxation in Hunter Mode ───────────────────
+        # After many consecutive dry runs, loosen filters to capture more leads
+        active_hunter = dict(hunter) if is_hunter and hunter else None
+        if is_hunter and active_hunter and empty_rounds >= MAX_EMPTY_ROUNDS:
+            orig_inst  = int(hunter.get("max_installs") or 5000)
+            orig_score = float(hunter.get("max_score") or 2.5)
+
+            # Progressive relaxation: +50% installs, +0.5 score per relaxation round
+            relax_steps = max(1, empty_rounds - MAX_EMPTY_ROUNDS + 1)
+            relaxed_inst  = min(orig_inst  * (1 + 0.5 * relax_steps), 50_000)
+            relaxed_score = min(orig_score + 0.5 * relax_steps, 4.0)
+
+            if (relaxed_inst  != relaxed_max_installs or
+                    relaxed_score != relaxed_max_score):
+                relaxed_max_installs = relaxed_inst
+                relaxed_max_score    = relaxed_score
+                push_log(f"  🔓 Filter relaxed → max_installs={int(relaxed_inst):,} "
+                         f"max_score={relaxed_score:.1f} "
+                         f"(original: {orig_inst:,} / {orig_score:.1f})")
+
+            active_hunter = dict(hunter)
+            active_hunter["max_installs"] = int(relaxed_inst)
+            active_hunter["max_score"]    = relaxed_score
+
+        # ── Process next keyword ───────────────────────────────────────────────
         kw = kw_queue.pop(0)
-        if kw not in kws_used:
-            kws_used.append(kw)
+        if kw in kws_used:
+            continue           # already processed — skip silently
+        kws_used.append(kw)
         upd(keywords_used=kws_used[:], phase="scraping")
 
-        batch = scrape_keyword(kw, hunter)
+        remaining = target - len(all_leads)
+        push_log(f"🔍 Searching: '{kw}' | Need {remaining} more leads …")
+
+        batch = scrape_keyword(kw, active_hunter if is_hunter else hunter)
         all_leads.extend(batch)
         upd(leads_found=len(all_leads), leads=[l.copy() for l in all_leads])
 
@@ -773,14 +889,29 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
             sheet_append_lead(lead)
             sheet_append_qualified(lead)
 
-        push_log(f"Total: {len(all_leads)} / {target}")
+        if batch:
+            empty_rounds = 0    # reset dry-run counter on any success
+            push_log(f"  ✅ +{len(batch)} leads | Total: {len(all_leads)} / {target}")
+        else:
+            empty_rounds += 1
+            push_log(f"  ⚠️ No leads from '{kw}' "
+                     f"({empty_rounds} consecutive dry run(s)) | "
+                     f"Total: {len(all_leads)} / {target}")
+            if is_hunter and empty_rounds >= MAX_EMPTY_ROUNDS:
+                push_log(f"  🔄 {MAX_EMPTY_ROUNDS} dry runs — expanding search …")
+
+        # ── Progress check ─────────────────────────────────────────────────────
+        if len(all_leads) >= target:
+            push_log(f"🎯 Target reached! {len(all_leads)} / {target} leads collected.")
+        elif len(all_leads) < target and not kw_queue:
+            push_log(f"  📊 {len(all_leads)}/{target} — continuing to expand search …")
 
     if stop_event.is_set():
         push_log("Stopped during scraping.")
         upd(running=False, phase="stopped")
         return
 
-    push_log(f"Scraping done. {len(all_leads)} leads. Starting emails …")
+    push_log(f"✅ Scraping complete. {len(all_leads)} leads collected. Starting emails …")
 
     # ── Phase 2: AI Email + Send ──────────────────────────────────────────────
     upd(phase="emailing")
