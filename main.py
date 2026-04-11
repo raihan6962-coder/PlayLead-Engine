@@ -506,22 +506,9 @@ def passes_filter(installs: int, score, ratings_count: int, hunter: dict) -> boo
     return True
 
 def scrape_keyword(keyword: str, original_keyword: str, hunter: dict = None) -> list:
-    """
-    Scrape Google Play for one keyword; return qualifying, non-duplicate leads.
-
-    Approach (from uploaded main.py) — DIRECT INLINE processing:
-      For each region, iterate search results immediately and fetch+process
-      each app on the spot. No two-phase collect-then-fetch — this matches
-      the uploaded main.py's proven flow that actually yields leads.
-
-    Additional features kept from current code:
-      - Keyword relevance check (is_keyword_relevant) against original_keyword
-      - Expanded region lists (SEARCH_COMBOS / HUNTER_SEARCH_COMBOS)
-      - n_hits=500 (from uploaded main.py)
-      - Detailed per-keyword stats log
-    """
+    """Scrape Google Play for one keyword; return qualifying, non-duplicate leads."""
     global global_seen_ids, global_seen_emails
-    push_log(f"  Scraping: '{keyword}'")
+    push_log(f"Scraping: '{keyword}'")
 
     # Pre-compute relevance tokens — original + current keyword merged
     original_tokens = build_keyword_tokens(original_keyword)
@@ -529,11 +516,7 @@ def scrape_keyword(keyword: str, original_keyword: str, hunter: dict = None) -> 
     all_tokens      = list(set(original_tokens + current_tokens))
 
     combos = HUNTER_SEARCH_COMBOS if (hunter and hunter.get("active")) else SEARCH_COMBOS
-
-    leads         = []
-    skipped_rel   = 0
-    skipped_fil   = 0
-    skipped_email = 0
+    leads = []
 
     for lang, country in combos:
         if stop_event.is_set():
@@ -541,16 +524,14 @@ def scrape_keyword(keyword: str, original_keyword: str, hunter: dict = None) -> 
         try:
             results = search(keyword, lang=lang, country=country, n_hits=500)
         except Exception as e:
-            push_log(f"    [{country}] search error: {e}")
+            push_log(f"  Search error ({country}): {e}")
             continue
 
-        country_new = 0
         for item in results:
             if stop_event.is_set():
                 break
 
             app_id = item.get("appId", "")
-            # Skip if already processed in any previous keyword or this run
             if not app_id or app_id in global_seen_ids:
                 continue
 
@@ -573,12 +554,10 @@ def scrape_keyword(keyword: str, original_keyword: str, hunter: dict = None) -> 
             # ── Keyword relevance check ────────────────────────────────────────
             if not is_keyword_relevant(app_title, app_description, app_genre,
                                        original_keyword, all_tokens):
-                skipped_rel += 1
                 continue
 
             # ── Install / rating filter ────────────────────────────────────────
             if not passes_filter(installs, score, ratings_count, hunter):
-                skipped_fil += 1
                 continue
 
             # ── Email extraction ───────────────────────────────────────────────
@@ -589,7 +568,6 @@ def scrape_keyword(keyword: str, original_keyword: str, hunter: dict = None) -> 
                 or extract_email(details.get("recentChanges", ""))
             )
             if not email or email in global_seen_emails:
-                skipped_email += 1
                 continue
 
             lead = {
@@ -611,20 +589,16 @@ def scrape_keyword(keyword: str, original_keyword: str, hunter: dict = None) -> 
             leads.append(lead)
             global_seen_emails.add(email)
             score_str = f"{score:.1f}★" if score else "new"
-            push_log(f"  ✔ {app_title} | {installs:,} inst | {score_str} | {email}")
-            country_new += 1
+            push_log(f"  OK {app_title} | {installs:,} installs | {score_str} | {email}")
 
             if stop_event.wait(0.25):
                 break
 
-        push_log(f"    [{country}] +{country_new} leads | total so far: {len(leads)}")
+        push_log(f"  [{country}] done. Leads so far: {len(leads)}")
         if stop_event.wait(0.5):
             break
 
-    push_log(
-        f"  '{keyword}': irrelevant={skipped_rel} | filtered={skipped_fil} | "
-        f"no-email={skipped_email} | ✅ leads={len(leads)}"
-    )
+    push_log(f"  {len(leads)} new leads from '{keyword}'")
     sheet_log_keyword(keyword, len(leads))
     return leads
 
@@ -852,6 +826,7 @@ def email_loop(leads: list, base_subject: str, base_body: str):
 def run_automation(initial_kw: str, target: int, hunter: dict = None):
     global cooldown_retry_thread
 
+    # Cancel pending cooldown retry before starting fresh
     if cooldown_retry_thread and cooldown_retry_thread.is_alive():
         _cancel_cooldown_retry()
         push_log("  Cancelled pending email retry (new automation starting).")
@@ -873,47 +848,21 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
     kws_used  = [initial_kw]
     kw_queue  = [initial_kw]
 
-    empty_rounds    = 0
-    ai_refill_count = 0
-    MAX_AI_REFILLS  = 20
-
     # ── Phase 1: Scrape ───────────────────────────────────────────────────────
     while len(all_leads) < target and not stop_event.is_set():
-
-        # ── Refill keyword queue when empty ───────────────────────────────────
         if not kw_queue:
-            if ai_refill_count >= MAX_AI_REFILLS:
-                push_log(f"⚠️ Reached keyword expansion limit ({MAX_AI_REFILLS} attempts). "
-                         f"Collected {len(all_leads)}/{target} leads.")
-                break
-
-            push_log(f"🔄 Expanding keywords (attempt {ai_refill_count + 1}) …")
+            push_log("Requesting AI keywords …")
             new_kws = ai_gen_keywords(initial_kw, kws_used, hunter)
-            ai_refill_count += 1
+            if not new_kws:
+                push_log("No more keywords. Stopping scrape.")
+                break
+            kw_queue.extend(new_kws)
 
-            if new_kws:
-                kw_queue.extend(new_kws)
-                push_log(f"  Added {len(new_kws)} new keywords to queue.")
-            else:
-                push_log("  Generating suffix variants from original keyword …")
-                # Always fall back to original keyword variants — stays on-topic
-                variants = _fallback_keywords(initial_kw, kws_used + kw_queue)
-                kw_queue.extend(variants[:5])
-                if not kw_queue:
-                    push_log("❌ No more keywords possible. Stopping scrape.")
-                    break
-
-        # ── Process next keyword ───────────────────────────────────────────────
         kw = kw_queue.pop(0)
-        if kw in kws_used:
-            continue
-        kws_used.append(kw)
+        if kw not in kws_used:
+            kws_used.append(kw)
         upd(keywords_used=kws_used[:], phase="scraping")
 
-        remaining = target - len(all_leads)
-        push_log(f"🔍 Searching: '{kw}' | Need {remaining} more leads …")
-
-        # Pass both current keyword AND original keyword to scraper
         batch = scrape_keyword(kw, initial_kw, hunter)
         all_leads.extend(batch)
         upd(leads_found=len(all_leads), leads=[l.copy() for l in all_leads])
@@ -922,26 +871,14 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
             sheet_append_lead(lead)
             sheet_append_qualified(lead)
 
-        if batch:
-            empty_rounds = 0
-            push_log(f"  ✅ +{len(batch)} leads | Total: {len(all_leads)} / {target}")
-        else:
-            empty_rounds += 1
-            push_log(f"  ⚠️ No leads from '{kw}' "
-                     f"({empty_rounds} dry run(s)) | "
-                     f"Total: {len(all_leads)} / {target}")
-
-        if len(all_leads) >= target:
-            push_log(f"🎯 Target reached! {len(all_leads)} / {target}")
-        elif not kw_queue:
-            push_log(f"  📊 {len(all_leads)}/{target} — fetching more keywords …")
+        push_log(f"Total: {len(all_leads)} / {target}")
 
     if stop_event.is_set():
         push_log("Stopped during scraping.")
         upd(running=False, phase="stopped")
         return
 
-    push_log(f"✅ Scraping complete. {len(all_leads)} leads collected. Starting emails …")
+    push_log(f"Scraping done. {len(all_leads)} leads. Starting emails …")
 
     # ── Phase 2: AI Email + Send ──────────────────────────────────────────────
     upd(phase="emailing")
