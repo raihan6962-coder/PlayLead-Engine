@@ -896,39 +896,43 @@ tbody tr:hover td { background: #13131c; }
       sheet.appendRow(Object.values(row));
 
     } else if (action === "mark_sent") {
-      var appId = data.app_id;
-      // "All Leads" tab update
-      var allSheet = ss.getSheetByName("All Leads");
-      if (allSheet) {
-        var vals = allSheet.getDataRange().getValues();
+      var appId   = String(data.app_id   || "").trim();
+      var email   = String(data.email    || "").trim().toLowerCase();
+      var appName = String(data.app_name || "").trim();
+
+      // Helper: update "Email Sent" = "Yes" in any sheet tab
+      // Matches by App ID column first; falls back to Email column.
+      // Both are tried so the row is always found regardless of column order.
+      function markSentInSheet(sheet) {
+        if (!sheet) return;
+        var vals    = sheet.getDataRange().getValues();
         var headers = vals[0];
-        var appIdCol = headers.indexOf("App ID");
-        var sentCol  = headers.indexOf("Email Sent") + 1;
-        if (appIdCol >= 0 && sentCol > 0) {
-          for (var i = 1; i < vals.length; i++) {
-            if (String(vals[i][appIdCol]).trim() === String(appId).trim()) {
-              allSheet.getRange(i+1, sentCol).setValue("Yes");
-              break;
-            }
+        var appIdCol  = headers.indexOf("App ID");
+        var emailCol  = headers.indexOf("Email");
+        var sentColIdx = headers.indexOf("Email Sent");
+        if (sentColIdx < 0) return;           // no "Email Sent" column — skip
+        var sentCol = sentColIdx + 1;         // 1-based for getRange
+
+        for (var i = 1; i < vals.length; i++) {
+          var rowAppId = appIdCol >= 0 ? String(vals[i][appIdCol]).trim() : "";
+          var rowEmail = emailCol  >= 0 ? String(vals[i][emailCol]).trim().toLowerCase() : "";
+          var currentStatus = String(vals[i][sentColIdx]).trim().toLowerCase();
+
+          // Skip rows already marked Yes — no double-write
+          if (currentStatus === "yes") continue;
+
+          // Match by App ID (preferred) OR by Email (fallback)
+          var matched = (appId && rowAppId && rowAppId === appId) ||
+                        (email && rowEmail && rowEmail === email);
+          if (matched) {
+            sheet.getRange(i+1, sentCol).setValue("Yes");
+            break;
           }
         }
       }
-      // "Qualified Leads" tab update
-      var qSheet = ss.getSheetByName("Qualified Leads");
-      if (qSheet) {
-        var vals = qSheet.getDataRange().getValues();
-        var headers = vals[0];
-        var appIdCol = headers.indexOf("App ID");
-        var sentCol  = headers.indexOf("Email Sent") + 1;
-        if (appIdCol >= 0 && sentCol > 0) {
-          for (var i = 1; i < vals.length; i++) {
-            if (String(vals[i][appIdCol]).trim() === String(appId).trim()) {
-              qSheet.getRange(i+1, sentCol).setValue("Yes");
-              break;
-            }
-          }
-        }
-      }
+
+      markSentInSheet(ss.getSheetByName("All Leads"));
+      markSentInSheet(ss.getSheetByName("Qualified Leads"));
       var sentSheet = ss.getSheetByName("Email Sent");
       if (!sentSheet) sentSheet = ss.insertSheet("Email Sent");
       if (sentSheet.getLastRow() === 0) {
