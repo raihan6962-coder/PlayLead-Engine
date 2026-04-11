@@ -443,39 +443,29 @@ def extract_email(text):
     m = EMAIL_RE.search(str(text))
     return m.group(0) if m else ""
 
-def passes_filter(installs: int, score, ratings_count: int, hunter: dict) -> bool:
+def passes_filter(installs: int, score, hunter: dict) -> bool:
     """
     Filter logic for both Normal Mode and Hunter Mode.
 
-    Hunter Mode strict rules (only weak-performing EXISTING apps):
-      - Must have at least 1 review (ratings_count > 0)
-      - Rating must be > 0 AND <= max_score (user input)
+    Hunter Mode:
       - Installs must be <= max_installs (user input)
-      - EXCLUDES: apps with 0 reviews, 0 rating, brand-new apps with no data
+      - Score must be <= max_score (user input), OR app has no score yet (new app)
+      - No ratings_count requirement — new/unrated apps are valid targets
 
     Normal Mode:
       - installs <= 10,000
-      - score <= 3.5 OR no score yet (new apps are OK in normal mode)
+      - score <= 3.5 OR no score yet (new apps OK)
     """
     if hunter and hunter.get("active"):
         max_inst  = int(hunter.get("max_installs") or 5000)
         max_score = float(hunter.get("max_score") or 2.5)
-
-        # Must have at least 1 real review
-        if not ratings_count or ratings_count < 1:
-            return False
-        # Rating must exist and be > 0
-        if not score or score <= 0:
-            return False
-        # Rating must not exceed user's threshold
-        if score > max_score:
-            return False
-        # Installs must be within user's threshold
         if installs > max_inst:
+            return False
+        if score is not None and score > max_score:
             return False
         return True
 
-    # Normal Mode — new apps (no score) are allowed; cap on installs + bad ratings
+    # Normal Mode
     if installs > 10_000:
         return False
     if score is not None and score > 3.5:
@@ -483,117 +473,80 @@ def passes_filter(installs: int, score, ratings_count: int, hunter: dict) -> boo
     return True
 
 def scrape_keyword(keyword: str, hunter: dict = None) -> list:
-    """
-    Scrape Google Play for one keyword.
-
-    Strategy — COLLECT FIRST, FILTER LATER:
-      1. Run search() across all regions → collect every unique app_id
-      2. Fetch full details for each unseen app_id
-      3. Apply filter (passes_filter) AFTER fetching details
-      4. Extract email from developer contact fields
-      5. Return only leads that pass filter AND have an email
-
-    This way no app is skipped at the search stage — we see the full
-    Play Store result set before any filtering happens.
-    """
+    """Scrape Google Play for one keyword; return qualifying, non-duplicate leads."""
     global global_seen_ids, global_seen_emails
-    push_log(f"  Scraping keyword: '{keyword}'")
+    push_log(f"🔍 Scraping: '{keyword}'")
+    leads = []
 
-    # ── Step 1: Collect all unique app_ids from search results ────────────────
     combos = HUNTER_SEARCH_COMBOS if (hunter and hunter.get("active")) else SEARCH_COMBOS
-    candidate_ids = []          # ordered, deduped list of unseen app_ids
-    seen_in_step1 = set()       # local dedup within this keyword run
-
     for lang, country in combos:
         if stop_event.is_set():
             break
         try:
-            results = search(keyword, lang=lang, country=country, n_hits=200)
+            results = search(keyword, lang=lang, country=country, n_hits=500)
         except Exception as e:
-            push_log(f"    [{country}] search error: {e}")
+            push_log(f"  Search error ({country}): {e}")
             continue
 
-        new_in_country = 0
         for item in results:
+            if stop_event.is_set():
+                break
             app_id = item.get("appId", "")
-            if not app_id:
+            if not app_id or app_id in global_seen_ids:
                 continue
-            if app_id in global_seen_ids or app_id in seen_in_step1:
+            try:
+                details = gp_app(app_id, lang="en", country="us")
+            except Exception:
+                global_seen_ids.add(app_id)
                 continue
-            seen_in_step1.add(app_id)
-            candidate_ids.append(app_id)
-            new_in_country += 1
 
-        push_log(f"    [{country}] {new_in_country} new app_ids (total candidates: {len(candidate_ids)})")
-        if stop_event.wait(0.3):
+            installs = details.get("minInstalls") or 0
+            score    = details.get("score")
+
+            if not passes_filter(installs, score, hunter):
+                global_seen_ids.add(app_id)
+                continue
+
+            email = (
+                extract_email(details.get("developerEmail", ""))
+                or extract_email(details.get("privacyPolicy", ""))
+                or extract_email(details.get("description", ""))
+                or extract_email(details.get("recentChanges", ""))
+            )
+            if not email or email in global_seen_emails:
+                global_seen_ids.add(app_id)
+                continue
+
+            lead = {
+                "app_id":      app_id,
+                "app_name":    details.get("title", ""),
+                "developer":   details.get("developer", ""),
+                "email":       email,
+                "category":    details.get("genre", ""),
+                "installs":    installs,
+                "score":       score,
+                "ratings":     details.get("ratings") or 0,
+                "description": (details.get("description") or "")[:300],
+                "url":         f"https://play.google.com/store/apps/details?id={app_id}",
+                "icon":        details.get("icon", ""),
+                "keyword":     keyword,
+                "scraped_at":  time.strftime("%Y-%m-%d %H:%M:%S"),
+                "email_sent":  False,
+            }
+            leads.append(lead)
+            global_seen_ids.add(app_id)
+            global_seen_emails.add(email)
+            score_str = f"{score:.1f}★" if score else "new"
+            push_log(f"  ✅ {lead['app_name']} | {installs:,} installs | {score_str} | {email}")
+
+            if stop_event.wait(0.25):
+                break
+
+        push_log(f"  [{country}] done. Leads so far: {len(leads)}")
+        if stop_event.wait(0.5):
             break
 
-    if not candidate_ids:
-        push_log(f"  0 candidates found for '{keyword}'")
-        sheet_log_keyword(keyword, 0)
-        return []
-
-    push_log(f"  Fetching details for {len(candidate_ids)} candidates …")
-
-    # ── Step 2 & 3: Fetch details + apply filter + extract email ─────────────
-    leads = []
-    checked = 0
-
-    for app_id in candidate_ids:
-        if stop_event.is_set():
-            break
-
-        checked += 1
-        global_seen_ids.add(app_id)   # mark as seen regardless of outcome
-
-        try:
-            details = gp_app(app_id, lang="en", country="us")
-        except Exception:
-            continue
-
-        installs      = details.get("minInstalls") or 0
-        score         = details.get("score")
-        ratings_count = details.get("ratings") or 0
-
-        # Apply filter — strict requirements unchanged
-        if not passes_filter(installs, score, ratings_count, hunter):
-            continue
-
-        # Extract email from all available fields
-        email = (
-            extract_email(details.get("developerEmail", ""))
-            or extract_email(details.get("privacyPolicy", ""))
-            or extract_email(details.get("description", ""))
-            or extract_email(details.get("recentChanges", ""))
-        )
-        if not email or email in global_seen_emails:
-            continue
-
-        lead = {
-            "app_id":      app_id,
-            "app_name":    details.get("title", ""),
-            "developer":   details.get("developer", ""),
-            "email":       email,
-            "category":    details.get("genre", ""),
-            "installs":    installs,
-            "score":       score,
-            "ratings":     ratings_count,
-            "description": (details.get("description") or "")[:300],
-            "url":         f"https://play.google.com/store/apps/details?id={app_id}",
-            "icon":        details.get("icon", ""),
-            "keyword":     keyword,
-            "scraped_at":  time.strftime("%Y-%m-%d %H:%M:%S"),
-            "email_sent":  False,
-        }
-        leads.append(lead)
-        global_seen_emails.add(email)
-        score_str = f"{score:.1f}★" if score else "new"
-        push_log(f"  ✔ {lead['app_name']} | {installs:,} inst | {score_str} | {email}")
-
-        if stop_event.wait(0.2):
-            break
-
-    push_log(f"  '{keyword}': checked {checked} apps → {len(leads)} leads qualify")
+    push_log(f"  📦 {len(leads)} new leads from '{keyword}'")
     sheet_log_keyword(keyword, len(leads))
     return leads
 
