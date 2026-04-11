@@ -676,6 +676,15 @@ def email_loop(leads: list, base_subject: str, base_body: str):
             push_log("Stopped during email phase.")
             return
 
+        # Safety guard: skip any lead already marked sent — never send twice
+        if lead.get("email_sent"):
+            push_log(f"  Skipping {lead['app_name']} — already sent.")
+            continue
+
+        if not lead.get("email"):
+            push_log(f"  Skipping {lead['app_name']} — no email address.")
+            continue
+
         push_log(f"  AI writing email for {lead['app_name']} … [{'OLD APP' if format_score(lead.get('score')) else 'NEW APP'} template]")
         subject, body = ai_gen_email(lead, base_subject, base_body)
 
@@ -908,8 +917,14 @@ def api_send_pending():
         "OLD_APP_EMAIL_BODY":    data.get("old_app_email_body")    or os.environ.get("OLD_APP_EMAIL_BODY", ""),
         "APPS_SCRIPT_WEB_URL":   data.get("sheet_url")            or os.environ.get("APPS_SCRIPT_WEB_URL", ""),
     }
-    threading.Thread(target=run_send_pending, args=(leads,), daemon=True).start()
-    return jsonify({"ok": True, "count": len(leads)})
+    # Filter out any leads already marked sent before passing to backend
+    # email_loop also has this guard, but filtering here avoids unnecessary AI calls
+    fresh_leads = [l for l in leads if not l.get("email_sent") and l.get("email")]
+    if not fresh_leads:
+        return jsonify({"error": "No unsent leads with email in provided list"}), 400
+
+    threading.Thread(target=run_send_pending, args=(fresh_leads,), daemon=True).start()
+    return jsonify({"ok": True, "count": len(fresh_leads)})
 
 @application.route("/api/spam_test", methods=["POST"])
 def api_spam_test():
