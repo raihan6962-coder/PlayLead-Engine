@@ -425,16 +425,28 @@ def fill_template(tpl: str, lead: dict) -> str:
 # ── Play Store scraper ────────────────────────────────────────────────────────
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
-# ZIP file থেকে নেওয়া — 5টি core region, কম duplicate বেশি lead
+# Normal mode — 5টি core region
 SEARCH_COMBOS = [
     ("en", "us"), ("en", "gb"), ("en", "in"), ("en", "au"), ("en", "ca"),
 ]
 
+# Hunter mode — বেশি region = বেশি niche app
 HUNTER_SEARCH_COMBOS = [
     ("en", "us"), ("en", "gb"), ("en", "au"), ("en", "ca"), ("en", "nz"),
     ("en", "sg"), ("en", "za"), ("en", "ng"), ("en", "gh"), ("en", "ke"),
     ("en", "ph"), ("en", "my"), ("en", "in"),
 ]
+
+# Anti-block: request এর মাঝে random delay (seconds)
+SCRAPE_DELAY_MIN = 1.5
+SCRAPE_DELAY_MAX = 4.0
+
+# প্রতিটি keyword এ minimum কতটা lead চাই
+MIN_LEADS_PER_KEYWORD_NORMAL = 3
+MIN_LEADS_PER_KEYWORD_HUNTER = 2
+
+# Block detect হলে কতক্ষণ wait করব
+BLOCK_BACKOFF_SECONDS = [10, 20, 40]  # 3 বার retry
 
 def extract_email(text):
     if not text:
@@ -442,10 +454,19 @@ def extract_email(text):
     m = EMAIL_RE.search(str(text))
     return m.group(0) if m else ""
 
-def passes_filter(installs: int, score, ratings_count: int, hunter: dict) -> bool:
+def passes_filter(installs: int, score, ratings_count: int, hunter: dict,
+                  relaxed: bool = False) -> bool:
     if hunter and hunter.get("active"):
         max_inst  = int(hunter.get("max_installs") or 5000)
         max_score = float(hunter.get("max_score") or 2.5)
+
+        # Relaxed: limit বাড়িয়ে আরও app ধরা হয়
+        if relaxed:
+            if installs > max_inst * 4:
+                return False
+            if score is not None and score > max_score + 1.5:
+                return False
+            return True
 
         if not ratings_count or ratings_count < 1:
             return False
@@ -457,28 +478,94 @@ def passes_filter(installs: int, score, ratings_count: int, hunter: dict) -> boo
             return False
         return True
 
-    # Normal Mode — new apps (no score) allowed; cap on installs + bad ratings
+    # Normal Mode
+    if relaxed:
+        if installs > 100_000:
+            return False
+        if score is not None and score > 4.2:
+            return False
+        return True
+
     if installs > 10_000:
         return False
     if score is not None and score > 3.5:
         return False
     return True
 
-def scrape_keyword(keyword: str, hunter: dict = None) -> list:
-    """Scrape Google Play for one keyword; return qualifying, non-duplicate leads."""
-    global global_seen_ids, global_seen_emails
-    push_log(f"Scraping: '{keyword}'")
-    leads = []
 
-    combos = HUNTER_SEARCH_COMBOS if (hunter and hunter.get("active")) else SEARCH_COMBOS
+def _safe_search(keyword: str, lang: str, country: str, n_hits: int = 500) -> list:
+    """
+    Anti-block wrapper around google_play_scraper search().
+    Block বা error detect হলে backoff করে retry করে।
+    """
+    for attempt, backoff in enumerate(BLOCK_BACKOFF_SECONDS + [0]):
+        try:
+            results = search(keyword, lang=lang, country=country, n_hits=n_hits)
+            # Random delay — bot detection এড়াতে
+            time.sleep(random.uniform(SCRAPE_DELAY_MIN, SCRAPE_DELAY_MAX))
+            return results
+        except Exception as e:
+            err = str(e).lower()
+            # Rate limit / block সন্দেহ হলে
+            if any(x in err for x in ["429", "too many", "blocked", "captcha",
+                                       "forbidden", "503", "timeout", "connection"]):
+                if attempt < len(BLOCK_BACKOFF_SECONDS):
+                    wait = BLOCK_BACKOFF_SECONDS[attempt]
+                    push_log(f"  ⚠️ Block/rate-limit detected ({country}). Waiting {wait}s …")
+                    if stop_event.wait(wait):
+                        return []
+                    continue
+                else:
+                    push_log(f"  ❌ Giving up on ({country}) after retries: {e}")
+                    return []
+            else:
+                push_log(f"  Search error ({country}): {e}")
+                return []
+    return []
+
+
+def _safe_app_detail(app_id: str) -> dict:
+    """
+    Anti-block wrapper around gp_app().
+    Error হলে backoff করে retry করে।
+    """
+    for attempt, backoff in enumerate(BLOCK_BACKOFF_SECONDS + [0]):
+        try:
+            details = gp_app(app_id, lang="en", country="us")
+            time.sleep(random.uniform(0.3, 0.8))
+            return details
+        except Exception as e:
+            err = str(e).lower()
+            if any(x in err for x in ["429", "too many", "blocked", "captcha",
+                                       "forbidden", "503", "timeout", "connection"]):
+                if attempt < len(BLOCK_BACKOFF_SECONDS):
+                    wait = BLOCK_BACKOFF_SECONDS[attempt]
+                    push_log(f"  ⚠️ App detail block (id={app_id}). Waiting {wait}s …")
+                    if stop_event.wait(wait):
+                        return {}
+                    continue
+                else:
+                    return {}
+            else:
+                return {}
+    return {}
+
+
+def _scrape_single_pass(keyword: str, combos: list, hunter: dict,
+                         relaxed: bool = False) -> list:
+    """
+    একটি pass — সব combos ঘুরে qualifying leads সংগ্রহ করে।
+    relaxed=True হলে filter loose হয়ে আরও lead ধরে।
+    """
+    global global_seen_ids, global_seen_emails
+    leads = []
 
     for lang, country in combos:
         if stop_event.is_set():
             break
-        try:
-            results = search(keyword, lang=lang, country=country, n_hits=500)
-        except Exception as e:
-            push_log(f"  Search error ({country}): {e}")
+
+        results = _safe_search(keyword, lang, country)
+        if not results:
             continue
 
         for item in results:
@@ -489,9 +576,8 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
             if not app_id or app_id in global_seen_ids:
                 continue
 
-            try:
-                details = gp_app(app_id, lang="en", country="us")
-            except Exception:
+            details = _safe_app_detail(app_id)
+            if not details:
                 global_seen_ids.add(app_id)
                 continue
 
@@ -499,7 +585,7 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
             score         = details.get("score")
             ratings_count = details.get("ratings") or 0
 
-            if not passes_filter(installs, score, ratings_count, hunter):
+            if not passes_filter(installs, score, ratings_count, hunter, relaxed):
                 global_seen_ids.add(app_id)
                 continue
 
@@ -533,14 +619,41 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
             global_seen_ids.add(app_id)
             global_seen_emails.add(email)
             score_str = f"{score:.1f}★" if score else "new"
-            push_log(f"  OK {lead['app_name']} | {installs:,} installs | {score_str} | {email}")
+            mode_tag  = "[relaxed]" if relaxed else ""
+            push_log(f"  ✅ {lead['app_name']} | {installs:,} installs | {score_str} | {email} {mode_tag}")
 
-            if stop_event.wait(0.25):
-                break
-
-        push_log(f"  [{country}] done. Leads so far: {len(leads)}")
-        if stop_event.wait(0.5):
+        push_log(f"  [{country}] done. Leads so far this keyword: {len(leads)}")
+        if stop_event.wait(0.3):
             break
+
+    return leads
+
+
+def scrape_keyword(keyword: str, hunter: dict = None) -> list:
+    """
+    Scrape Google Play for one keyword.
+
+    Strategy:
+    1. Normal pass — strict filter
+    2. যদি minimum lead না আসে → relaxed filter দিয়ে আরেকটা pass
+    3. তারপরও কম হলে → log করে return (পরের keyword-এ যাবে)
+    """
+    is_hunter = bool(hunter and hunter.get("active"))
+    combos    = HUNTER_SEARCH_COMBOS if is_hunter else SEARCH_COMBOS
+    min_leads = MIN_LEADS_PER_KEYWORD_HUNTER if is_hunter else MIN_LEADS_PER_KEYWORD_NORMAL
+
+    push_log(f"🔍 Scraping: '{keyword}' | mode={'Hunter' if is_hunter else 'Normal'} | min={min_leads}")
+
+    # ── Pass 1: strict filter ─────────────────────────────────────────────────
+    leads = _scrape_single_pass(keyword, combos, hunter, relaxed=False)
+    push_log(f"  Pass-1 done: {len(leads)} leads")
+
+    # ── Pass 2: relaxed filter যদি minimum না পাওয়া যায় ─────────────────────
+    if len(leads) < min_leads and not stop_event.is_set():
+        push_log(f"  Pass-1 gave {len(leads)} < {min_leads} leads. Trying relaxed filter …")
+        extra = _scrape_single_pass(keyword, combos, hunter, relaxed=True)
+        leads.extend(extra)
+        push_log(f"  Pass-2 done: {len(extra)} extra leads (total: {len(leads)})")
 
     push_log(f"  {len(leads)} new leads from '{keyword}'")
     sheet_log_keyword(keyword, len(leads))
@@ -792,15 +905,22 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
     kws_used  = [initial_kw]
     kw_queue  = [initial_kw]
 
-    # ── Phase 1: Scrape ───────────────────────────────────────────────────────
+    # ── Phase 1: Scrape — target hit না হওয়া পর্যন্ত চলে ──────────────────────
+    consecutive_empty = 0       # পরপর কতটা keyword 0 lead দিল
+    MAX_CONSECUTIVE_EMPTY = 6   # এর বেশি হলে keyword pool শেষ ধরে নেওয়া হবে
+
     while len(all_leads) < target and not stop_event.is_set():
+
+        # কীওয়ার্ড queue খালি হলে AI থেকে নতুন আনো
         if not kw_queue:
             push_log("Requesting AI keywords …")
             new_kws = ai_gen_keywords(initial_kw, kws_used, hunter)
-            if not new_kws:
-                push_log("No more keywords. Stopping scrape.")
+            fresh = [k for k in new_kws if k not in kws_used]
+            if not fresh:
+                push_log("⚠️ AI returned no new keywords. Stopping scrape.")
                 break
-            kw_queue.extend(new_kws)
+            kw_queue.extend(fresh)
+            push_log(f"  {len(fresh)} new keywords queued. Total progress: {len(all_leads)}/{target}")
 
         kw = kw_queue.pop(0)
         if kw not in kws_used:
@@ -808,6 +928,18 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
         upd(keywords_used=kws_used[:], phase="scraping")
 
         batch = scrape_keyword(kw, hunter)
+
+        if not batch:
+            consecutive_empty += 1
+            push_log(f"  No leads from '{kw}' ({consecutive_empty}/{MAX_CONSECUTIVE_EMPTY} consecutive empty)")
+            if consecutive_empty >= MAX_CONSECUTIVE_EMPTY:
+                push_log("⚠️ Too many empty keywords in a row — requesting fresh AI keywords.")
+                consecutive_empty = 0
+                kw_queue.clear()   # empty queue → loop top এ AI keyword fetch হবে
+            continue
+        else:
+            consecutive_empty = 0  # lead পেলে counter reset
+
         all_leads.extend(batch)
         upd(leads_found=len(all_leads), leads=[l.copy() for l in all_leads])
 
@@ -815,7 +947,7 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
             sheet_append_lead(lead)
             sheet_append_qualified(lead)
 
-        push_log(f"Total: {len(all_leads)} / {target}")
+        push_log(f"📊 Total: {len(all_leads)} / {target} | keywords used: {len(kws_used)}")
 
     if stop_event.is_set():
         push_log("Stopped during scraping.")
