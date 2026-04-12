@@ -94,10 +94,6 @@ def sheet_log_keyword(keyword: str, count: int):
 
 # ── Keyword relevance check ───────────────────────────────────────────────────
 def build_keyword_tokens(keyword: str) -> list:
-    """
-    Extract meaningful tokens from keyword for relevance matching.
-    Ignores stop words so 'finance app tracker' → ['finance', 'tracker']
-    """
     STOP_WORDS = {
         "app", "apps", "application", "tool", "tools", "simple", "easy",
         "free", "best", "top", "new", "lite", "basic", "mini", "pro",
@@ -112,19 +108,8 @@ def build_keyword_tokens(keyword: str) -> list:
 
 def is_keyword_relevant(app_title: str, app_description: str, app_genre: str,
                          keyword: str, keyword_tokens: list) -> bool:
-    """
-    Check if an app is truly relevant to the original keyword.
-
-    Strategy — at least ONE meaningful keyword token must appear in:
-    - App title (highest confidence), OR
-    - Genre/category, OR
-    - First 500 chars of description
-
-    If the keyword has no meaningful tokens after stop-word removal,
-    relevance check is skipped (always passes) to avoid over-filtering.
-    """
     if not keyword_tokens:
-        return True  # no tokens to match against — skip relevance check
+        return True
 
     combined = " ".join([
         (app_title        or "").lower(),
@@ -141,15 +126,6 @@ def is_keyword_relevant(app_title: str, app_description: str, app_genre: str,
 
 # ── AI keyword generation ─────────────────────────────────────────────────────
 def ai_gen_keywords(original: str, used: list, hunter: dict = None) -> list:
-    """
-    Generate search keywords for Play Store scraping.
-
-    CRITICAL RULE: Every generated keyword MUST be semantically within the
-    same niche/topic as the original keyword. Never generate unrelated keywords.
-
-    Hunter Mode: niche, low-competition keywords in the SAME topic space.
-    Normal Mode: semantically similar keywords in the same niche.
-    """
     key = get_cfg("GROQ_API_KEY")
     if not key:
         push_log("GROQ_API_KEY not set — using built-in keyword expansion")
@@ -222,14 +198,8 @@ def ai_gen_keywords(original: str, used: list, hunter: dict = None) -> list:
 
 
 def _fallback_keywords(original: str, used: list) -> list:
-    """
-    Built-in keyword expansion — stays within original keyword niche.
-    Generates suffix/prefix variants that surface different (smaller) app sets
-    while remaining semantically tied to the original keyword topic.
-    """
     base = original.lower().strip()
 
-    # These suffixes are appended to the ORIGINAL keyword — so they stay on-topic
     suffixes = [
         "lite", "simple", "basic", "mini", "micro",
         "offline", "local", "community", "indie",
@@ -245,28 +215,23 @@ def _fallback_keywords(original: str, used: list) -> list:
 
     candidates = []
 
-    # Suffix variants: "finance tracker lite", "finance tracker offline" etc.
     for s in suffixes:
         c = f"{base} {s}"
         if c not in used:
             candidates.append(c)
 
-    # Prefix variants: "simple finance tracker", "offline finance tracker" etc.
     for p in prefixes:
         c = f"{p} {base}"
         if c not in used:
             candidates.append(c)
 
-    # Word combinations from original keyword (stay in same domain)
     words = base.split()
     if len(words) > 1:
-        # Pairs of words from the original keyword
         for i in range(len(words)):
             for j in range(i + 1, len(words)):
                 c = f"{words[i]} {words[j]}"
                 if c not in used and len(c) > 4:
                     candidates.append(c)
-        # Single meaningful words (> 4 chars) from original
         for w in words:
             if len(w) > 4 and w not in used:
                 candidates.append(w)
@@ -460,11 +425,9 @@ def fill_template(tpl: str, lead: dict) -> str:
 # ── Play Store scraper ────────────────────────────────────────────────────────
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
-# Expanded search regions — more regions = more unique apps discovered
+# ZIP file থেকে নেওয়া — 5টি core region, কম duplicate বেশি lead
 SEARCH_COMBOS = [
-    ("en", "us"), ("en", "gb"), ("en", "au"), ("en", "ca"), ("en", "nz"),
-    ("en", "ie"), ("en", "sg"), ("en", "in"), ("en", "za"), ("en", "ng"),
-    ("en", "gh"), ("en", "ke"), ("en", "pk"), ("en", "ph"), ("en", "my"),
+    ("en", "us"), ("en", "gb"), ("en", "in"), ("en", "au"), ("en", "ca"),
 ]
 
 HUNTER_SEARCH_COMBOS = [
@@ -480,10 +443,6 @@ def extract_email(text):
     return m.group(0) if m else ""
 
 def passes_filter(installs: int, score, ratings_count: int, hunter: dict) -> bool:
-    """
-    Filter logic for both Normal Mode and Hunter Mode.
-    Keyword relevance is checked separately in scrape_keyword().
-    """
     if hunter and hunter.get("active"):
         max_inst  = int(hunter.get("max_installs") or 5000)
         max_score = float(hunter.get("max_score") or 2.5)
@@ -505,18 +464,13 @@ def passes_filter(installs: int, score, ratings_count: int, hunter: dict) -> boo
         return False
     return True
 
-def scrape_keyword(keyword: str, original_keyword: str, hunter: dict = None) -> list:
+def scrape_keyword(keyword: str, hunter: dict = None) -> list:
     """Scrape Google Play for one keyword; return qualifying, non-duplicate leads."""
     global global_seen_ids, global_seen_emails
     push_log(f"Scraping: '{keyword}'")
-
-    # Pre-compute relevance tokens — original + current keyword merged
-    original_tokens = build_keyword_tokens(original_keyword)
-    current_tokens  = build_keyword_tokens(keyword)
-    all_tokens      = list(set(original_tokens + current_tokens))
+    leads = []
 
     combos = HUNTER_SEARCH_COMBOS if (hunter and hunter.get("active")) else SEARCH_COMBOS
-    leads = []
 
     for lang, country in combos:
         if stop_event.is_set():
@@ -541,26 +495,14 @@ def scrape_keyword(keyword: str, original_keyword: str, hunter: dict = None) -> 
                 global_seen_ids.add(app_id)
                 continue
 
-            app_title       = details.get("title", "")
-            app_description = details.get("description", "")
-            app_genre       = details.get("genre", "")
-            installs        = details.get("minInstalls") or 0
-            score           = details.get("score")
-            ratings_count   = details.get("ratings") or 0
+            installs      = details.get("minInstalls") or 0
+            score         = details.get("score")
+            ratings_count = details.get("ratings") or 0
 
-            # Mark seen immediately — prevents re-fetching across regions
-            global_seen_ids.add(app_id)
-
-            # ── Keyword relevance check ────────────────────────────────────────
-            if not is_keyword_relevant(app_title, app_description, app_genre,
-                                       original_keyword, all_tokens):
-                continue
-
-            # ── Install / rating filter ────────────────────────────────────────
             if not passes_filter(installs, score, ratings_count, hunter):
+                global_seen_ids.add(app_id)
                 continue
 
-            # ── Email extraction ───────────────────────────────────────────────
             email = (
                 extract_email(details.get("developerEmail", ""))
                 or extract_email(details.get("privacyPolicy", ""))
@@ -568,18 +510,19 @@ def scrape_keyword(keyword: str, original_keyword: str, hunter: dict = None) -> 
                 or extract_email(details.get("recentChanges", ""))
             )
             if not email or email in global_seen_emails:
+                global_seen_ids.add(app_id)
                 continue
 
             lead = {
                 "app_id":      app_id,
-                "app_name":    app_title,
+                "app_name":    details.get("title", ""),
                 "developer":   details.get("developer", ""),
                 "email":       email,
-                "category":    app_genre,
+                "category":    details.get("genre", ""),
                 "installs":    installs,
                 "score":       score,
                 "ratings":     ratings_count,
-                "description": (app_description or "")[:300],
+                "description": (details.get("description") or "")[:300],
                 "url":         f"https://play.google.com/store/apps/details?id={app_id}",
                 "icon":        details.get("icon", ""),
                 "keyword":     keyword,
@@ -587,9 +530,10 @@ def scrape_keyword(keyword: str, original_keyword: str, hunter: dict = None) -> 
                 "email_sent":  False,
             }
             leads.append(lead)
+            global_seen_ids.add(app_id)
             global_seen_emails.add(email)
             score_str = f"{score:.1f}★" if score else "new"
-            push_log(f"  OK {app_title} | {installs:,} installs | {score_str} | {email}")
+            push_log(f"  OK {lead['app_name']} | {installs:,} installs | {score_str} | {email}")
 
             if stop_event.wait(0.25):
                 break
@@ -863,7 +807,7 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
             kws_used.append(kw)
         upd(keywords_used=kws_used[:], phase="scraping")
 
-        batch = scrape_keyword(kw, initial_kw, hunter)
+        batch = scrape_keyword(kw, hunter)
         all_leads.extend(batch)
         upd(leads_found=len(all_leads), leads=[l.copy() for l in all_leads])
 
