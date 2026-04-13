@@ -443,22 +443,19 @@ def extract_email(text):
 
 def passes_filter(installs: int, score, hunter: dict) -> bool:
     if hunter and hunter.get("active"):
-        # Hunter Mode: bad-rated apps
         max_inst  = int(hunter.get("max_installs") or 5000)
         max_score = float(hunter.get("max_score") or 2.5)
         if installs > max_inst:
             return False
-        if score is None or score <= 0:
-            return False  # no rating = new app = not for hunter
-        if score > max_score:
+        if score is not None and score > max_score:
             return False
         return True
 
-    # Normal Mode: brand-new apps only — no rating, installs < 10,000
+    # Normal Mode — new apps (no score) allowed; cap on installs + bad ratings
     if installs > 10_000:
         return False
-    if score is not None and score > 0:
-        return False  # has rating = old app = skip
+    if score is not None and score > 3.5:
+        return False
     return True
 
 def scrape_keyword(keyword: str, hunter: dict = None) -> list:
@@ -483,38 +480,20 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
                 break
 
             app_id = item.get("appId", "")
-            norm_id = (app_id or "").strip().lower()
-            if not norm_id or norm_id in global_seen_ids:
+            if not app_id or app_id in global_seen_ids:
                 continue
 
             try:
                 details = gp_app(app_id, lang="en", country="us")
             except Exception:
-                global_seen_ids.add(norm_id)
+                global_seen_ids.add(app_id)
                 continue
 
             installs = details.get("minInstalls") or 0
-            # score: 0.0 মানে কোনো rating নেই — None হিসেবে treat করা হবে
-            raw_score = details.get("score")
-            try:
-                score = float(raw_score) if raw_score else None
-                if score is not None and score <= 0:
-                    score = None
-            except (TypeError, ValueError):
-                score = None
+            score    = details.get("score")
 
             if not passes_filter(installs, score, hunter):
-                global_seen_ids.add(norm_id)
-                if hunter and hunter.get("active"):
-                    max_inst  = int(hunter.get("max_installs") or 5000)
-                    max_score = float(hunter.get("max_score") or 2.5)
-                    title = details.get("title", app_id)
-                    if installs > max_inst:
-                        push_log(f"  SKIP [{title}] — installs {installs:,} > {max_inst:,}")
-                    elif score is None:
-                        push_log(f"  SKIP [{title}] — no rating (new app — not for hunter)")
-                    elif score > max_score:
-                        push_log(f"  SKIP [{title}] — score {score:.1f} > {max_score}")
+                global_seen_ids.add(app_id)
                 continue
 
             email = (
@@ -523,10 +502,8 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
                 or extract_email(details.get("description", ""))
                 or extract_email(details.get("recentChanges", ""))
             )
-            # normalize email: lowercase + strip
-            email = email.lower().strip() if email else ""
             if not email or email in global_seen_emails:
-                global_seen_ids.add(norm_id)
+                global_seen_ids.add(app_id)
                 continue
 
             lead = {
@@ -545,7 +522,7 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
                 "email_sent":  False,
             }
             leads.append(lead)
-            global_seen_ids.add(norm_id)
+            global_seen_ids.add(app_id)
             global_seen_emails.add(email)
             score_str = f"{score:.1f}★" if score else "new"
             push_log(f"  OK {lead['app_name']} | {installs:,} installs | {score_str} | {email}")
@@ -623,8 +600,7 @@ def send_email(lead: dict, subject: str, body: str):
             result = r.json() if r.text else {}
 
             if result.get("status") == "ok":
-                sender_em = get_cfg("SENDER_EMAIL", "your Gmail")
-                push_log(f"  [EMAIL SENT] From: {sender_em} → To: {lead['email']} | {lead.get('app_name','')}")
+                push_log(f"  Email sent: {lead['email']}")
                 return "ok", ""
 
             err_msg = result.get("msg", "?")
@@ -801,28 +777,6 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
     base_subject = get_cfg("EMAIL_SUBJECT") or ""
     base_body    = get_cfg("EMAIL_BODY")    or ""
 
-    # ── Sheet থেকে existing leads preload — strong duplicate prevention ────────
-    sheet_url = get_cfg("APPS_SCRIPT_WEB_URL")
-    if sheet_url:
-        try:
-            push_log("  Preloading existing leads from Sheet to skip duplicates…")
-            r = requests.post(sheet_url, json={"action": "get_all_leads"}, timeout=25)
-            existing = r.json().get("leads", []) if r.text else []
-            loaded_ids, loaded_emails = 0, 0
-            for ex in existing:
-                aid = (ex.get("App ID") or ex.get("app_id") or "").strip().lower()
-                em  = (ex.get("Email")  or ex.get("email")  or "").strip().lower()
-                if aid and aid not in global_seen_ids:
-                    global_seen_ids.add(aid)
-                    loaded_ids += 1
-                if em and em not in global_seen_emails:
-                    global_seen_emails.add(em)
-                    loaded_emails += 1
-            push_log(f"  Preloaded {loaded_ids} IDs + {loaded_emails} emails from Sheet.")
-        except Exception as e:
-            push_log(f"  Sheet preload skipped: {e}")
-    # ─────────────────────────────────────────────────────────────────────────
-
     urls = get_email_urls()
     reset_email_quotas(urls)
 
@@ -917,7 +871,6 @@ def api_start():
         "APPS_SCRIPT_WEB_URL":   data.get("sheet_url")            or os.environ.get("APPS_SCRIPT_WEB_URL", ""),
         "EMAIL_SCRIPT_URL":      data.get("email_script_url")     or os.environ.get("EMAIL_SCRIPT_URL", ""),
         "SENDER_NAME":           data.get("sender_name")          or os.environ.get("SENDER_NAME", ""),
-        "SENDER_EMAIL":          data.get("sender_email")         or os.environ.get("SENDER_EMAIL", ""),
         "SENDER_COMPANY":        data.get("sender_company")       or os.environ.get("SENDER_COMPANY", ""),
         "EMAIL_SUBJECT":         data.get("email_subject")        or os.environ.get("EMAIL_SUBJECT", ""),
         "EMAIL_BODY":            data.get("email_body")           or os.environ.get("EMAIL_BODY", ""),
