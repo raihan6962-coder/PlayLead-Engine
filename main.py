@@ -443,19 +443,23 @@ def extract_email(text):
 
 def passes_filter(installs: int, score, hunter: dict) -> bool:
     if hunter and hunter.get("active"):
+        # Hunter Mode — rated apps with bad score (low installs + low rating)
         max_inst  = int(hunter.get("max_installs") or 5000)
         max_score = float(hunter.get("max_score") or 2.5)
         if installs > max_inst:
             return False
-        if score is not None and score > max_score:
+        # Hunter mode REQUIRES a rating — must be a rated app with bad score
+        if score is None or score <= 0:
+            return False
+        if score > max_score:
             return False
         return True
 
-    # Normal Mode — new apps (no score) allowed; cap on installs + bad ratings
-    if installs > 10_000:
+    # Normal Mode — ONLY truly new apps: no rating at all, installs < 5000
+    if installs >= 5000:
         return False
-    if score is not None and score > 3.5:
-        return False
+    if score is not None and score > 0:
+        return False  # has a rating → not a new app → reject
     return True
 
 def scrape_keyword(keyword: str, hunter: dict = None) -> list:
@@ -490,7 +494,14 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
                 continue
 
             installs = details.get("minInstalls") or 0
-            score    = details.get("score")
+            # realScore is more accurate than cached score field
+            raw_score = details.get("realScore") or details.get("score") or None
+            try:
+                score = float(raw_score) if raw_score else None
+                if score is not None and score <= 0:
+                    score = None
+            except (TypeError, ValueError):
+                score = None
 
             if not passes_filter(installs, score, hunter):
                 global_seen_ids.add(app_id)
@@ -600,7 +611,8 @@ def send_email(lead: dict, subject: str, body: str):
             result = r.json() if r.text else {}
 
             if result.get("status") == "ok":
-                push_log(f"  Email sent: {lead['email']}")
+                url_label = f"Script #{urls.index(url) + 1}"
+                push_log(f"  Email sent to {lead['email']} via {url_label}")
                 return "ok", ""
 
             err_msg = result.get("msg", "?")
@@ -773,6 +785,29 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
 
     mode = "Hunter" if (hunter and hunter.get("active")) else "Normal"
     push_log(f"Started | kw='{initial_kw}' | target={target} | mode={mode}")
+
+    # ── Preload existing leads from Sheet to avoid duplicates ─────────────────
+    sheet_url = get_cfg("APPS_SCRIPT_WEB_URL")
+    if sheet_url:
+        try:
+            push_log("  Loading existing leads from Sheet to skip duplicates…")
+            r = requests.post(sheet_url, json={"action": "get_all_leads"}, timeout=25)
+            existing = r.json().get("leads", []) if r.text else []
+            loaded_ids    = 0
+            loaded_emails = 0
+            for ex in existing:
+                aid = ex.get("App ID") or ex.get("app_id") or ""
+                em  = ex.get("Email")  or ex.get("email")  or ""
+                if aid and aid not in global_seen_ids:
+                    global_seen_ids.add(aid)
+                    loaded_ids += 1
+                if em and em not in global_seen_emails:
+                    global_seen_emails.add(em)
+                    loaded_emails += 1
+            push_log(f"  Preloaded {loaded_ids} app IDs, {loaded_emails} emails from Sheet.")
+        except Exception as e:
+            push_log(f"  Could not preload Sheet data: {e}")
+    # ─────────────────────────────────────────────────────────────────────────
 
     base_subject = get_cfg("EMAIL_SUBJECT") or ""
     base_body    = get_cfg("EMAIL_BODY")    or ""
