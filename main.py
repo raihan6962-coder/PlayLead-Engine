@@ -1,4 +1,3 @@
-
 import os, time, random, threading, json, re, logging
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
@@ -426,7 +425,6 @@ def fill_template(tpl: str, lead: dict) -> str:
 # ── Play Store scraper ────────────────────────────────────────────────────────
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
-# ZIP file থেকে নেওয়া — 5টি core region, কম duplicate বেশি lead
 SEARCH_COMBOS = [
     ("en", "us"), ("en", "gb"), ("en", "in"), ("en", "au"), ("en", "ca"),
 ]
@@ -443,18 +441,13 @@ def extract_email(text):
     m = EMAIL_RE.search(str(text))
     return m.group(0) if m else ""
 
-def passes_filter(installs: int, score, ratings_count: int, hunter: dict) -> bool:
+def passes_filter(installs: int, score, hunter: dict) -> bool:
     if hunter and hunter.get("active"):
         max_inst  = int(hunter.get("max_installs") or 5000)
         max_score = float(hunter.get("max_score") or 2.5)
-
-        if not ratings_count or ratings_count < 1:
-            return False
-        if not score or score <= 0:
-            return False
-        if score > max_score:
-            return False
         if installs > max_inst:
+            return False
+        if score is not None and score > max_score:
             return False
         return True
 
@@ -496,11 +489,10 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
                 global_seen_ids.add(app_id)
                 continue
 
-            installs      = details.get("minInstalls") or 0
-            score         = details.get("score")
-            ratings_count = details.get("ratings") or 0
+            installs = details.get("minInstalls") or 0
+            score    = details.get("score")
 
-            if not passes_filter(installs, score, ratings_count, hunter):
+            if not passes_filter(installs, score, hunter):
                 global_seen_ids.add(app_id)
                 continue
 
@@ -522,7 +514,6 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
                 "category":    details.get("genre", ""),
                 "installs":    installs,
                 "score":       score,
-                "ratings":     ratings_count,
                 "description": (details.get("description") or "")[:300],
                 "url":         f"https://play.google.com/store/apps/details?id={app_id}",
                 "icon":        details.get("icon", ""),
@@ -1097,11 +1088,11 @@ def api_send_single():
                         break
                 state["emails_sent"] = state.get("emails_sent", 0) + 1
             sheet_mark_sent(lead_data["app_id"], lead_data["email"], lead_data["app_name"])
-            push_log(f"  ✅ Manual send complete: {lead_data['email']}")
+            push_log(f"  Manual send complete: {lead_data['email']}")
         elif status == "quota":
-            push_log(f"  ⚠️ Quota exhausted — could not send to {lead_data['email']}")
+            push_log(f"  Quota exhausted — could not send to {lead_data['email']}")
         else:
-            push_log(f"  ❌ Send failed for {lead_data['email']}")
+            push_log(f"  Send failed for {lead_data['email']}")
 
         upd(running=False, phase="done")
 
