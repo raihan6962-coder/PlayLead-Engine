@@ -705,37 +705,42 @@ def _schedule_email_retry(leads_to_send: list, base_subject: str, base_body: str
     push_log(f"  Retry complete. {sent} additional emails sent.")
 
 
-# ── Email sending loop ────────────────────────────────────────────────────────
+# ── Email sending loop (FIXED: continuous send, never stops mid-way) ──────────
 def email_loop(leads: list, base_subject: str, base_body: str):
     global cooldown_retry_thread
 
-    for i, lead in enumerate(leads):
+    # Filter only pending leads upfront
+    pending = [l for l in leads if not l.get("email_sent") and l.get("email")]
+    total = len(pending)
+    sent_count = 0
+
+    push_log(f"  Email loop started: {total} pending leads to send.")
+
+    i = 0
+    while i < len(pending):
         if stop_event.is_set():
             push_log("Stopped during email phase.")
             return
 
-        if lead.get("email_sent"):
-            push_log(f"  Skipping {lead['app_name']} — already sent.")
-            continue
+        lead = pending[i]
 
-        if not lead.get("email"):
-            push_log(f"  Skipping {lead['app_name']} — no email address.")
-            continue
-
-        push_log(f"  AI writing email for {lead['app_name']} … [{'OLD APP' if format_score(lead.get('score')) else 'NEW APP'} template]")
+        push_log(f"  [{i+1}/{total}] AI writing email for {lead['app_name']} … [{'OLD APP' if format_score(lead.get('score')) else 'NEW APP'} template]")
         subject, body = ai_gen_email(lead, base_subject, base_body)
 
         status, _ = send_email(lead, subject, body)
 
         if status == "ok":
             lead["email_sent"] = True
+            sent_count += 1
             with state_lock:
                 state["emails_sent"] = state.get("emails_sent", 0) + 1
                 state["leads"] = [l.copy() for l in leads]
             sheet_mark_sent(lead["app_id"], lead["email"], lead["app_name"])
+            push_log(f"  ✓ Sent {sent_count}/{total}. Remaining: {total - sent_count}")
+            i += 1
 
         elif status == "quota":
-            remaining = leads[i:]
+            remaining = pending[i:]
             push_log(f"  All email quotas exhausted. {len(remaining)} leads queued for 1-hour retry.")
             cooldown_retry_thread = threading.Thread(
                 target=_schedule_email_retry,
@@ -746,16 +751,20 @@ def email_loop(leads: list, base_subject: str, base_body: str):
             return
 
         else:
-            push_log("  Could not send email. Moving to next lead…")
+            # Send failed for this lead — log and move on, do NOT stop
+            push_log(f"  Send failed for {lead['app_name']}. Moving to next lead…")
+            i += 1
 
         if stop_event.is_set():
             return
 
-        if i < len(leads) - 1:
+        if i < len(pending):
             wait = random.uniform(30, 60)
-            push_log(f"  Waiting {wait:.0f}s … ({i+1}/{len(leads)})")
+            push_log(f"  Waiting {wait:.0f}s before next email … ({i}/{total} done)")
             if stop_event.wait(wait):
                 return
+
+    push_log(f"  Email loop complete. Total sent this session: {sent_count}/{total}")
 
 
 # ── Master automation ─────────────────────────────────────────────────────────
