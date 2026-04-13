@@ -439,16 +439,22 @@ def extract_email(text):
     if not text:
         return ""
     m = EMAIL_RE.search(str(text))
-    return m.group(0) if m else ""
+    return m.group(0).lower().strip() if m else ""
+
+def _norm_id(app_id: str) -> str:
+    return (app_id or "").strip().lower()
+
+def _norm_email(email: str) -> str:
+    return (email or "").strip().lower()
 
 def passes_filter(installs: int, score, hunter: dict) -> bool:
     if hunter and hunter.get("active"):
-        # Hunter Mode — rated apps with bad score (low installs + low rating)
+        # Hunter Mode — low install apps WITH a bad rating
         max_inst  = int(hunter.get("max_installs") or 5000)
         max_score = float(hunter.get("max_score") or 2.5)
         if installs > max_inst:
             return False
-        # Hunter mode REQUIRES a rating — must be a rated app with bad score
+        # Must have a real rating and it must be bad (≤ max_score)
         if score is None or score <= 0:
             return False
         if score > max_score:
@@ -459,7 +465,7 @@ def passes_filter(installs: int, score, hunter: dict) -> bool:
     if installs >= 5000:
         return False
     if score is not None and score > 0:
-        return False  # has a rating → not a new app → reject
+        return False  # already has reviews → not a brand new app → skip
     return True
 
 def scrape_keyword(keyword: str, hunter: dict = None) -> list:
@@ -484,27 +490,39 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
                 break
 
             app_id = item.get("appId", "")
-            if not app_id or app_id in global_seen_ids:
+            if not app_id or _norm_id(app_id) in global_seen_ids:
                 continue
 
             try:
                 details = gp_app(app_id, lang="en", country="us")
             except Exception:
-                global_seen_ids.add(app_id)
+                global_seen_ids.add(_norm_id(app_id))
                 continue
 
             installs = details.get("minInstalls") or 0
-            # realScore is more accurate than cached score field
-            raw_score = details.get("realScore") or details.get("score") or None
+            # score from google_play_scraper — 0.0 means no ratings yet
+            raw_score = details.get("score")
             try:
                 score = float(raw_score) if raw_score else None
                 if score is not None and score <= 0:
-                    score = None
+                    score = None  # treat 0.0 as "no rating"
             except (TypeError, ValueError):
                 score = None
 
             if not passes_filter(installs, score, hunter):
-                global_seen_ids.add(app_id)
+                if hunter and hunter.get("active"):
+                    max_inst  = int(hunter.get("max_installs") or 5000)
+                    max_score = float(hunter.get("max_score") or 2.5)
+                    if installs > max_inst:
+                        reason = f"installs {installs:,} > {max_inst:,}"
+                    elif score is None:
+                        reason = "no rating (new app — not for hunter)"
+                    elif score > max_score:
+                        reason = f"score {score:.1f} > {max_score}"
+                    else:
+                        reason = "unknown"
+                    push_log(f"  SKIP [{details.get('title',app_id)}] — {reason}")
+                global_seen_ids.add(_norm_id(app_id))
                 continue
 
             email = (
@@ -513,15 +531,16 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
                 or extract_email(details.get("description", ""))
                 or extract_email(details.get("recentChanges", ""))
             )
-            if not email or email in global_seen_emails:
-                global_seen_ids.add(app_id)
+            norm_email = _norm_email(email)
+            if not norm_email or norm_email in global_seen_emails:
+                global_seen_ids.add(_norm_id(app_id))
                 continue
 
             lead = {
                 "app_id":      app_id,
                 "app_name":    details.get("title", ""),
                 "developer":   details.get("developer", ""),
-                "email":       email,
+                "email":       norm_email,
                 "category":    details.get("genre", ""),
                 "installs":    installs,
                 "score":       score,
@@ -533,10 +552,10 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
                 "email_sent":  False,
             }
             leads.append(lead)
-            global_seen_ids.add(app_id)
-            global_seen_emails.add(email)
+            global_seen_ids.add(_norm_id(app_id))
+            global_seen_emails.add(norm_email)
             score_str = f"{score:.1f}★" if score else "new"
-            push_log(f"  OK {lead['app_name']} | {installs:,} installs | {score_str} | {email}")
+            push_log(f"  OK {lead['app_name']} | {installs:,} installs | {score_str} | {norm_email}")
 
             if stop_event.wait(0.25):
                 break
@@ -611,8 +630,8 @@ def send_email(lead: dict, subject: str, body: str):
             result = r.json() if r.text else {}
 
             if result.get("status") == "ok":
-                url_label = f"Script #{urls.index(url) + 1}"
-                push_log(f"  Email sent to {lead['email']} via {url_label}")
+                sender_email = get_cfg("SENDER_EMAIL", "your Gmail")
+                push_log(f"  [EMAIL SENT] From: {sender_email} → To: {lead['email']} | App: {lead.get('app_name','')}")
                 return "ok", ""
 
             err_msg = result.get("msg", "?")
@@ -796,8 +815,8 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
             loaded_ids    = 0
             loaded_emails = 0
             for ex in existing:
-                aid = ex.get("App ID") or ex.get("app_id") or ""
-                em  = ex.get("Email")  or ex.get("email")  or ""
+                aid = _norm_id(ex.get("App ID") or ex.get("app_id") or "")
+                em  = _norm_email(ex.get("Email") or ex.get("email") or "")
                 if aid and aid not in global_seen_ids:
                     global_seen_ids.add(aid)
                     loaded_ids += 1
@@ -906,6 +925,7 @@ def api_start():
         "APPS_SCRIPT_WEB_URL":   data.get("sheet_url")            or os.environ.get("APPS_SCRIPT_WEB_URL", ""),
         "EMAIL_SCRIPT_URL":      data.get("email_script_url")     or os.environ.get("EMAIL_SCRIPT_URL", ""),
         "SENDER_NAME":           data.get("sender_name")          or os.environ.get("SENDER_NAME", ""),
+        "SENDER_EMAIL":          data.get("sender_email")         or os.environ.get("SENDER_EMAIL", ""),
         "SENDER_COMPANY":        data.get("sender_company")       or os.environ.get("SENDER_COMPANY", ""),
         "EMAIL_SUBJECT":         data.get("email_subject")        or os.environ.get("EMAIL_SUBJECT", ""),
         "EMAIL_BODY":            data.get("email_body")           or os.environ.get("EMAIL_BODY", ""),
@@ -970,6 +990,7 @@ def api_send_pending():
         "GROQ_API_KEY":          data.get("groq_key")             or os.environ.get("GROQ_API_KEY", ""),
         "EMAIL_SCRIPT_URL":      data.get("email_script_url")     or os.environ.get("EMAIL_SCRIPT_URL", ""),
         "SENDER_NAME":           data.get("sender_name")          or os.environ.get("SENDER_NAME", ""),
+        "SENDER_EMAIL":          data.get("sender_email")         or os.environ.get("SENDER_EMAIL", ""),
         "SENDER_COMPANY":        data.get("sender_company")       or os.environ.get("SENDER_COMPANY", ""),
         "EMAIL_SUBJECT":         data.get("email_subject")        or os.environ.get("EMAIL_SUBJECT", ""),
         "EMAIL_BODY":            data.get("email_body")           or os.environ.get("EMAIL_BODY", ""),
@@ -1089,6 +1110,7 @@ def api_send_single():
         "GROQ_API_KEY":          data.get("groq_key")             or os.environ.get("GROQ_API_KEY", ""),
         "EMAIL_SCRIPT_URL":      data.get("email_script_url")     or os.environ.get("EMAIL_SCRIPT_URL", ""),
         "SENDER_NAME":           data.get("sender_name")          or os.environ.get("SENDER_NAME", ""),
+        "SENDER_EMAIL":          data.get("sender_email")         or os.environ.get("SENDER_EMAIL", ""),
         "SENDER_COMPANY":        data.get("sender_company")       or os.environ.get("SENDER_COMPANY", ""),
         "EMAIL_SUBJECT":         data.get("email_subject")        or os.environ.get("EMAIL_SUBJECT", ""),
         "EMAIL_BODY":            data.get("email_body")           or os.environ.get("EMAIL_BODY", ""),
