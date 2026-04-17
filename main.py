@@ -24,6 +24,8 @@ state = {
 # ── Global duplicate tracker — persists across runs until clear ───────────────
 global_seen_ids: set = set()
 global_seen_emails: set = set()
+global_seen_app_names: set = set()
+global_seen_urls: set = set()
 
 # ── Email cooldown state ──────────────────────────────────────────────────────
 email_state_lock = threading.Lock()
@@ -91,6 +93,34 @@ def sheet_log_keyword(keyword: str, count: int):
         "Keyword": keyword, "Leads Found": count,
         "Logged At": time.strftime("%Y-%m-%d %H:%M:%S"),
     }})
+
+# Fetch existing leads from the sheet to enforce duplicate tracking across sessions
+def sync_existing_leads_from_sheet():
+    sheet_url = get_cfg("APPS_SCRIPT_WEB_URL")
+    if not sheet_url:
+        return
+    push_log("Syncing existing leads from Google Sheet to prevent duplicates...")
+    try:
+        r = requests.post(sheet_url, json={"action": "get_all_leads"}, timeout=20)
+        result = r.json() if r.text else {}
+        leads = result.get("leads", [])
+        for lead in leads:
+            app_id = lead.get("App ID") or lead.get("app_id")
+            app_name = lead.get("App Name") or lead.get("app_name")
+            url = lead.get("URL") or lead.get("url")
+            email = lead.get("Email") or lead.get("email")
+
+            if app_id:
+                global_seen_ids.add(str(app_id).strip().lower())
+            if app_name:
+                global_seen_app_names.add(str(app_name).strip().lower())
+            if url:
+                global_seen_urls.add(str(url).strip().lower())
+            if email:
+                global_seen_emails.add(str(email).strip().lower())
+        push_log(f"  ✓ Synced {len(leads)} existing leads from sheet.")
+    except Exception as e:
+        push_log(f"  Warning: Sheet sync failed: {e}")
 
 # ── Keyword relevance check ───────────────────────────────────────────────────
 def build_keyword_tokens(keyword: str) -> list:
@@ -442,25 +472,34 @@ def extract_email(text):
     return m.group(0) if m else ""
 
 def passes_filter(installs: int, score, hunter: dict) -> bool:
-    if hunter and hunter.get("active"):
-        max_inst  = int(hunter.get("max_installs") or 5000)
-        max_score = float(hunter.get("max_score") or 2.5)
-        if installs > max_inst:
-            return False
-        if score is not None and score > max_score:
-            return False
-        return True
+    # 1. Enforce strict install bounds for BOTH modes: 1,000 to 5,000
+    if installs < 1000 or installs > 5000:
+        return False
 
-    # Normal Mode — new apps (no score) allowed; cap on installs + bad ratings
-    if installs > 10_000:
-        return False
-    if score is not None and score > 3.5:
-        return False
-    return True
+    if hunter and hunter.get("active"):
+        # HUNTER MODE
+        # Must have a visible rating (score is not None and > 0)
+        if score is None or score == 0:
+            return False
+        
+        # Preserve the original max_score logic if it exists
+        max_score = float(hunter.get("max_score") or 2.5)
+        if score > max_score:
+            return False
+        
+        return True
+    else:
+        # NORMAL MODE
+        # "Only collect new apps" is defined strictly by the 1k-5k install limit.
+        # Preserve original bad-rating logic just in case it has a rating.
+        if score is not None and score > 3.5:
+            return False
+            
+        return True
 
 def scrape_keyword(keyword: str, hunter: dict = None) -> list:
     """Scrape Google Play for one keyword; return qualifying, non-duplicate leads."""
-    global global_seen_ids, global_seen_emails
+    global global_seen_ids, global_seen_emails, global_seen_app_names, global_seen_urls
     push_log(f"Scraping: '{keyword}'")
     leads = []
 
@@ -479,51 +518,81 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
             if stop_event.is_set():
                 break
 
+            # 1. Check Package Name (App ID)
             app_id = item.get("appId", "")
-            if not app_id or app_id in global_seen_ids:
+            norm_id = str(app_id).strip().lower()
+            if not app_id or norm_id in global_seen_ids:
+                continue
+
+            # 2. Check App Name (Pre-fetch from summary to save API calls)
+            app_title = item.get("title", "")
+            norm_title = str(app_title).strip().lower()
+            if norm_title and norm_title in global_seen_app_names:
+                continue
+                
+            # 3. Check App URL
+            url = f"https://play.google.com/store/apps/details?id={app_id}"
+            norm_url = url.strip().lower()
+            if norm_url in global_seen_urls:
                 continue
 
             try:
                 details = gp_app(app_id, lang="en", country="us")
             except Exception:
-                global_seen_ids.add(app_id)
+                global_seen_ids.add(norm_id)
+                continue
+
+            # Re-verify full exact title from detailed scrape just in case
+            full_title = details.get("title", "")
+            norm_full_title = str(full_title).strip().lower()
+            if norm_full_title and norm_full_title in global_seen_app_names:
+                global_seen_ids.add(norm_id)
                 continue
 
             installs = details.get("minInstalls") or 0
             score    = details.get("score")
 
             if not passes_filter(installs, score, hunter):
-                global_seen_ids.add(app_id)
+                global_seen_ids.add(norm_id)
                 continue
 
+            # 4. Check Email
             email = (
                 extract_email(details.get("developerEmail", ""))
                 or extract_email(details.get("privacyPolicy", ""))
                 or extract_email(details.get("description", ""))
                 or extract_email(details.get("recentChanges", ""))
             )
-            if not email or email in global_seen_emails:
-                global_seen_ids.add(app_id)
+            norm_email = str(email).strip().lower() if email else ""
+            if not email or norm_email in global_seen_emails:
+                global_seen_ids.add(norm_id)
                 continue
 
             lead = {
                 "app_id":      app_id,
-                "app_name":    details.get("title", ""),
+                "app_name":    full_title,
                 "developer":   details.get("developer", ""),
                 "email":       email,
                 "category":    details.get("genre", ""),
                 "installs":    installs,
                 "score":       score,
                 "description": (details.get("description") or "")[:300],
-                "url":         f"https://play.google.com/store/apps/details?id={app_id}",
+                "url":         url,
                 "icon":        details.get("icon", ""),
                 "keyword":     keyword,
                 "scraped_at":  time.strftime("%Y-%m-%d %H:%M:%S"),
                 "email_sent":  False,
             }
             leads.append(lead)
-            global_seen_ids.add(app_id)
-            global_seen_emails.add(email)
+            
+            # Mark entity as thoroughly seen
+            global_seen_ids.add(norm_id)
+            if norm_email:
+                global_seen_emails.add(norm_email)
+            if norm_full_title:
+                global_seen_app_names.add(norm_full_title)
+            global_seen_urls.add(norm_url)
+            
             score_str = f"{score:.1f}★" if score else "new"
             push_log(f"  OK {lead['app_name']} | {installs:,} installs | {score_str} | {email}")
 
@@ -789,6 +858,9 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
     urls = get_email_urls()
     reset_email_quotas(urls)
 
+    # Pre-sync with Google Sheet so we don't scrape apps we already have
+    sync_existing_leads_from_sheet()
+
     all_leads = []
     kws_used  = [initial_kw]
     kw_queue  = [initial_kw]
@@ -912,7 +984,7 @@ def api_status():
 
 @application.route("/api/clear", methods=["POST"])
 def api_clear():
-    global global_seen_ids, global_seen_emails
+    global global_seen_ids, global_seen_emails, global_seen_app_names, global_seen_urls
     with state_lock:
         if state["running"]:
             return jsonify({"error": "Cannot clear while running"}), 409
@@ -921,8 +993,10 @@ def api_clear():
             "keywords_used": [], "leads_found": 0, "emails_sent": 0,
             "logs": [], "leads": []
         })
-    global_seen_ids    = set()
-    global_seen_emails = set()
+    global_seen_ids       = set()
+    global_seen_emails    = set()
+    global_seen_app_names = set()
+    global_seen_urls      = set()
     log.info("History cleared.")
     return jsonify({"ok": True})
 
