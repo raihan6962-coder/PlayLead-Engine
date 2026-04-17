@@ -27,6 +27,19 @@ global_seen_emails: set = set()
 global_seen_app_names: set = set()
 global_seen_urls: set = set()
 
+# ── Excluded Geo-Targets (BD, IN, PK) ─────────────────────────────────────────
+EXCLUDED_GEO_TERMS = {
+    "india", "bangladesh", "pakistan",
+    "mumbai", "delhi", "bangalore", "bengaluru", "hyderabad", "chennai", "kolkata",
+    "pune", "ahmedabad", "surat", "jaipur", "lucknow", "kanpur", "nagpur",
+    "indore", "thane", "bhopal", "visakhapatnam", "pimpri", "patna", "vadodara",
+    "dhaka", "chittagong", "khulna", "rajshahi", "sylhet", "barisal", "rangpur",
+    "karachi", "lahore", "islamabad", "faisalabad", "rawalpindi", "gujranwala",
+    "peshawar", "multan", "hyderabad (sindh)", "quetta",
+    "gujarat", "maharashtra", "kerala", "punjab", "sindh", "tamil nadu", "karnataka",
+    "telangana", "uttar pradesh", "west bengal", "rajasthan"
+}
+
 # ── Email cooldown state ──────────────────────────────────────────────────────
 email_state_lock = threading.Lock()
 email_url_quotas: dict = {}
@@ -94,7 +107,7 @@ def sheet_log_keyword(keyword: str, count: int):
         "Logged At": time.strftime("%Y-%m-%d %H:%M:%S"),
     }})
 
-# Fetch existing leads from the sheet to enforce duplicate tracking across sessions
+# ── Sheet Sync to Prevent Duplicates Across Runs ──────────────────────────────
 def sync_existing_leads_from_sheet():
     sheet_url = get_cfg("APPS_SCRIPT_WEB_URL")
     if not sheet_url:
@@ -122,6 +135,7 @@ def sync_existing_leads_from_sheet():
     except Exception as e:
         push_log(f"  Warning: Sheet sync failed: {e}")
 
+
 # ── Keyword relevance check ───────────────────────────────────────────────────
 def build_keyword_tokens(keyword: str) -> list:
     STOP_WORDS = {
@@ -134,7 +148,6 @@ def build_keyword_tokens(keyword: str) -> list:
     }
     tokens = re.findall(r"[a-z]+", keyword.lower())
     return [t for t in tokens if t not in STOP_WORDS and len(t) > 2]
-
 
 def is_keyword_relevant(app_title: str, app_description: str, app_genre: str,
                          keyword: str, keyword_tokens: list) -> bool:
@@ -455,47 +468,105 @@ def fill_template(tpl: str, lead: dict) -> str:
 # ── Play Store scraper ────────────────────────────────────────────────────────
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
+# Removed "IN" (India) to enforce strict GEO filtering
 SEARCH_COMBOS = [
-    ("en", "us"), ("en", "gb"), ("en", "in"), ("en", "au"), ("en", "ca"),
+    ("en", "us"), ("en", "gb"), ("en", "au"), ("en", "ca"),
 ]
 
 HUNTER_SEARCH_COMBOS = [
     ("en", "us"), ("en", "gb"), ("en", "au"), ("en", "ca"), ("en", "nz"),
     ("en", "sg"), ("en", "za"), ("en", "ng"), ("en", "gh"), ("en", "ke"),
-    ("en", "ph"), ("en", "my"), ("en", "in"),
+    ("en", "ph"), ("en", "my"),
 ]
 
-def extract_email(text):
-    if not text:
-        return ""
-    m = EMAIL_RE.search(str(text))
-    return m.group(0) if m else ""
+def extract_smart_email(details: dict) -> str:
+    """Smart email extractor that validates and filters blocked countries."""
+    fields_to_check = [
+        details.get("developerEmail", ""),
+        details.get("privacyPolicy", ""),
+        details.get("description", ""),
+        details.get("recentChanges", "")
+    ]
+    
+    for text in fields_to_check:
+        if not text:
+            continue
+        matches = EMAIL_RE.findall(str(text))
+        for match in matches:
+            email = match.lower()
+            
+            # Reject false positives (image extensions)
+            if email.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+                continue
+            
+            # Reject EXCLUDED GEO Countries strictly by domain ending
+            if email.endswith((".in", ".pk", ".bd")):
+                continue
+                
+            # Reject common dummy or system emails
+            if any(bad in email for bad in ["example.com", "android.com", "google.com", "sentry.io", "github.com", "w3.org"]):
+                continue
+                
+            return email
+            
+    return ""
 
 def passes_filter(installs: int, score, hunter: dict) -> bool:
-    # 1. Enforce strict install bounds for BOTH modes: 1,000 to 5,000
+    # We enforce strict install numbers (1,000 to 5,000)
+    if not isinstance(installs, (int, float)):
+        return False
+        
     if installs < 1000 or installs > 5000:
         return False
 
     if hunter and hunter.get("active"):
-        # HUNTER MODE
-        # Must have a visible rating (score is not None and > 0)
-        if score is None or score == 0:
-            return False
-        
-        # Preserve the original max_score logic if it exists
         max_score = float(hunter.get("max_score") or 2.5)
+        
+        # HUNTER MODE requires a valid rating
+        if score is None or score <= 0:
+            return False
+            
         if score > max_score:
             return False
-        
+            
         return True
     else:
-        # NORMAL MODE
-        # "Only collect new apps" is defined strictly by the 1k-5k install limit.
-        # Preserve original bad-rating logic just in case it has a rating.
+        # Normal Mode — new apps allowed (no score required)
         if score is not None and score > 3.5:
             return False
             
         return True
+
+def fetch_search_robust(keyword: str, lang: str, country: str, n_hits: int = 250) -> list:
+    """Robust search with retries to handle temporary Google Play blocks."""
+    for attempt in range(3):
+        try:
+            # Random delay before heavy search
+            time.sleep(random.uniform(1.5, 3.0))
+            return search(keyword, lang=lang, country=country, n_hits=n_hits)
+        except Exception as e:
+            push_log(f"  Search error ({country}) attempt {attempt+1}: {e}")
+            if stop_event.is_set():
+                break
+            time.sleep(5 * (attempt + 1))
+    return []
+
+def fetch_app_details_robust(app_id: str) -> dict:
+    """Robust app detail fetching with retries to handle rate limiting."""
+    for attempt in range(3):
+        try:
+            # Random delay to simulate human pacing
+            time.sleep(random.uniform(0.5, 1.5))
+            return gp_app(app_id, lang="en", country="us")
+        except Exception as e:
+            if "404" in str(e):
+                return None  # App no longer exists, don't retry
+            
+            push_log(f"  Details fetch error for {app_id}: {e}. Retrying...")
+            if stop_event.is_set():
+                break
+            time.sleep(3 * (attempt + 1))
+    return None
 
 def scrape_keyword(keyword: str, hunter: dict = None) -> list:
     """Scrape Google Play for one keyword; return qualifying, non-duplicate leads."""
@@ -508,41 +579,38 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
     for lang, country in combos:
         if stop_event.is_set():
             break
-        try:
-            results = search(keyword, lang=lang, country=country, n_hits=500)
-        except Exception as e:
-            push_log(f"  Search error ({country}): {e}")
-            continue
+            
+        results = fetch_search_robust(keyword, lang=lang, country=country, n_hits=250)
 
         for item in results:
             if stop_event.is_set():
                 break
 
-            # 1. Check Package Name (App ID)
+            # 1. Identity & Duplicate check via App ID
             app_id = item.get("appId", "")
             norm_id = str(app_id).strip().lower()
             if not app_id or norm_id in global_seen_ids:
                 continue
 
-            # 2. Check App Name (Pre-fetch from summary to save API calls)
+            # 2. Duplicate check via App Name
             app_title = item.get("title", "")
             norm_title = str(app_title).strip().lower()
             if norm_title and norm_title in global_seen_app_names:
                 continue
                 
-            # 3. Check App URL
+            # 3. Duplicate check via URL
             url = f"https://play.google.com/store/apps/details?id={app_id}"
             norm_url = url.strip().lower()
             if norm_url in global_seen_urls:
                 continue
 
-            try:
-                details = gp_app(app_id, lang="en", country="us")
-            except Exception:
+            # 4. Fetch Deep App Details Safely
+            details = fetch_app_details_robust(app_id)
+            if not details:
                 global_seen_ids.add(norm_id)
                 continue
 
-            # Re-verify full exact title from detailed scrape just in case
+            # Re-verify full title just in case
             full_title = details.get("title", "")
             norm_full_title = str(full_title).strip().lower()
             if norm_full_title and norm_full_title in global_seen_app_names:
@@ -552,17 +620,19 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
             installs = details.get("minInstalls") or 0
             score    = details.get("score")
 
+            # Validate against Normal or Hunter strict filters
             if not passes_filter(installs, score, hunter):
                 global_seen_ids.add(norm_id)
                 continue
 
-            # 4. Check Email
-            email = (
-                extract_email(details.get("developerEmail", ""))
-                or extract_email(details.get("privacyPolicy", ""))
-                or extract_email(details.get("description", ""))
-                or extract_email(details.get("recentChanges", ""))
-            )
+            # Strict GEO Filter via Developer Address (Exclude BD, IN, PK entirely)
+            dev_address = str(details.get("developerAddress", "")).lower()
+            if any(term in dev_address for term in EXCLUDED_GEO_TERMS):
+                global_seen_ids.add(norm_id)
+                continue
+
+            # Extract Email
+            email = extract_smart_email(details)
             norm_email = str(email).strip().lower() if email else ""
             if not email or norm_email in global_seen_emails:
                 global_seen_ids.add(norm_id)
@@ -585,7 +655,7 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
             }
             leads.append(lead)
             
-            # Mark entity as thoroughly seen
+            # Persist tracking
             global_seen_ids.add(norm_id)
             if norm_email:
                 global_seen_emails.add(norm_email)
@@ -858,7 +928,7 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
     urls = get_email_urls()
     reset_email_quotas(urls)
 
-    # Pre-sync with Google Sheet so we don't scrape apps we already have
+    # Pre-sync the Google Sheet to avoid duplicating leads historically gathered
     sync_existing_leads_from_sheet()
 
     all_leads = []
@@ -946,6 +1016,7 @@ def api_start():
     with state_lock:
         if state["running"]:
             return jsonify({"error": "Already running"}), 409
+    
     global run_cfg
     run_cfg = {
         "GROQ_API_KEY":          data.get("groq_key")             or os.environ.get("GROQ_API_KEY", ""),
@@ -960,6 +1031,7 @@ def api_start():
         "OLD_APP_EMAIL_SUBJECT": data.get("old_app_email_subject") or os.environ.get("OLD_APP_EMAIL_SUBJECT", ""),
         "OLD_APP_EMAIL_BODY":    data.get("old_app_email_body")    or os.environ.get("OLD_APP_EMAIL_BODY", ""),
     }
+    
     target = int(data.get("target") or os.environ.get("TARGET_LEADS", 300))
     hunter = data.get("hunter") or {}
     threading.Thread(target=run_automation, args=(keyword, target, hunter), daemon=True).start()
@@ -1009,10 +1081,12 @@ def api_send_pending():
     with state_lock:
         if state["running"]:
             return jsonify({"error": "Automation is running"}), 409
+            
     data  = request.get_json(silent=True) or {}
     leads = data.get("leads") or []
     if not leads:
         return jsonify({"error": "No leads provided"}), 400
+        
     global run_cfg
     run_cfg = {
         "GROQ_API_KEY":          data.get("groq_key")             or os.environ.get("GROQ_API_KEY", ""),
@@ -1027,6 +1101,7 @@ def api_send_pending():
         "OLD_APP_EMAIL_BODY":    data.get("old_app_email_body")    or os.environ.get("OLD_APP_EMAIL_BODY", ""),
         "APPS_SCRIPT_WEB_URL":   data.get("sheet_url")            or os.environ.get("APPS_SCRIPT_WEB_URL", ""),
     }
+    
     fresh_leads = [l for l in leads if not l.get("email_sent") and l.get("email")]
     if not fresh_leads:
         return jsonify({"error": "No unsent leads with email in provided list"}), 400
@@ -1040,6 +1115,7 @@ def api_spam_test():
     test_to = (data.get("test_email") or "").strip()
     if not test_to:
         return jsonify({"error": "test_email required"}), 400
+        
     global run_cfg
     run_cfg = {
         "GROQ_API_KEY":          data.get("groq_key")             or os.environ.get("GROQ_API_KEY", ""),
@@ -1053,6 +1129,7 @@ def api_spam_test():
         "OLD_APP_EMAIL_SUBJECT": data.get("old_app_email_subject") or os.environ.get("OLD_APP_EMAIL_SUBJECT", ""),
         "OLD_APP_EMAIL_BODY":    data.get("old_app_email_body")    or os.environ.get("OLD_APP_EMAIL_BODY", ""),
     }
+    
     raw_score = data.get("sample_score")
     sample_score = float(raw_score) if raw_score else None
     sample = {
