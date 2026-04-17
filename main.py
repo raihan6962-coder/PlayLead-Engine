@@ -26,6 +26,8 @@ global_seen_ids:    set = set()
 global_seen_emails: set = set()
 
 # ── Sheet duplicate cache — loaded once at automation start ───────────────────
+# We pull all existing sheet leads into memory so every scrape can instantly
+# skip anything that is already in the sheet — zero HTTP calls per lead.
 sheet_known_ids:    set  = set()
 sheet_known_emails: set  = set()
 sheet_cache_loaded: bool = False
@@ -54,131 +56,6 @@ def push_log(msg: str):
 def upd(**kw):
     with state_lock:
         state.update(kw)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ── BIG COMPANY FILTER ────────────────────────────────────────────────────────
-# Apps owned by large corporations are excluded — we only want indie/small devs
-# ══════════════════════════════════════════════════════════════════════════════
-BIG_COMPANY_KEYWORDS = [
-    # Tech giants
-    "google", "alphabet", "meta", "facebook", "instagram", "whatsapp",
-    "microsoft", "apple", "amazon", "aws", "netflix", "spotify",
-    "adobe", "oracle", "salesforce", "sap", "ibm", "intel", "nvidia",
-    "samsung", "huawei", "xiaomi", "oppo", "vivo", "oneplus",
-    "sony", "lg electronics", "tencent", "alibaba", "bytedance",
-    "tiktok", "baidu", "jd.com", "meituan", "pinduoduo",
-    # Big app companies
-    "king", "ea games", "electronic arts", "activision", "blizzard",
-    "ubisoft", "zynga", "supercell", "riot games", "epic games",
-    "unity technologies", "garena", "moonton", "netease",
-    # Banks / Finance giants
-    "jpmorgan", "j.p. morgan", "bank of america", "citibank", "wells fargo",
-    "goldman sachs", "morgan stanley", "hsbc", "barclays", "deutsche bank",
-    "paypal", "stripe", "square", "visa", "mastercard", "american express",
-    # Telecom / Media
-    "verizon", "at&t", "t-mobile", "comcast", "disney", "warner",
-    "nbcuniversal", "cbs", "fox", "hbo", "hulu", "paramount",
-    # Ride / Food / Delivery giants
-    "uber", "lyft", "grab", "ola", "didi", "doordash", "instacart",
-    "deliveroo", "just eat", "foodpanda",
-    # Others
-    "airbnb", "booking.com", "expedia", "tripadvisor", "yelp",
-    "linkedin", "twitter", "x corp", "snap", "snapchat", "pinterest",
-    "dropbox", "box.com", "atlassian", "jira", "slack", "zoom",
-    "shopify", "squarespace", "wix", "wordpress", "automattic",
-    "health care", "healthcare", "hospital", "government", "gov",
-    "ministry", "municipal", "university", "college", "bank",
-]
-
-def is_big_company(developer: str, app_name: str) -> bool:
-    """
-    Returns True if the app/developer looks like a large corporation.
-    Checks exact keyword presence in both developer name and app name.
-    """
-    dev_lower  = (developer  or "").lower()
-    name_lower = (app_name   or "").lower()
-    combined   = f"{dev_lower} {name_lower}"
-
-    for kw in BIG_COMPANY_KEYWORDS:
-        if kw in combined:
-            return True
-
-    # Heuristic: very long developer names (> 5 words) often = big corp / agency
-    dev_words = dev_lower.split()
-    if len(dev_words) > 6:
-        return True
-
-    # Developer name that is clearly a large brand (all caps abbreviation like "IBM LLC")
-    if re.match(r'^[A-Z]{3,}\s*(LLC|Inc|Corp|Ltd|GmbH|SA|AG|PLC)?$', developer or ""):
-        return True
-
-    return False
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ── ANTI-BOT / STEALTH SCRAPING HELPERS ──────────────────────────────────────
-# Play Store detects rapid automated requests. We add:
-#   1. Human-like random delays between requests
-#   2. Jittered retry with exponential backoff on failure
-#   3. Randomized search combos order so pattern is not repetitive
-#   4. Max retries with longer waits between keyword scrapes
-# ══════════════════════════════════════════════════════════════════════════════
-
-def human_delay(min_s: float = 1.5, max_s: float = 4.0):
-    """Sleep for a random human-like duration. Blocks the calling thread."""
-    wait = random.uniform(min_s, max_s)
-    time.sleep(wait)
-
-def jitter_delay(base: float = 2.0, spread: float = 2.0):
-    """base ± spread seconds."""
-    time.sleep(max(0.5, base + random.uniform(-spread, spread)))
-
-def safe_search(keyword: str, lang: str, country: str,
-                n_hits: int = 200, retries: int = 3):
-    """
-    Wraps google_play_scraper.search() with retry + exponential backoff.
-    Reduced n_hits (200 vs 500) lowers per-request footprint → less suspicious.
-    Returns list of results or [] on failure.
-    """
-    for attempt in range(retries):
-        try:
-            results = search(keyword, lang=lang, country=country, n_hits=n_hits)
-            return results or []
-        except Exception as e:
-            err = str(e).lower()
-            if "429" in err or "too many" in err or "rate" in err:
-                wait = (2 ** attempt) * random.uniform(8, 15)
-                push_log(f"  Rate-limited on '{keyword}' [{country}]. Waiting {wait:.0f}s ... (attempt {attempt+1}/{retries})")
-                if stop_event.wait(wait):
-                    return []
-            else:
-                push_log(f"  Search error [{country}] attempt {attempt+1}: {e}")
-                if stop_event.wait(3):
-                    return []
-    return []
-
-def safe_app_detail(app_id: str, retries: int = 3):
-    """
-    Wraps gp_app() with retry + exponential backoff.
-    Returns details dict or None on failure.
-    """
-    for attempt in range(retries):
-        try:
-            details = gp_app(app_id, lang="en", country="us")
-            return details
-        except Exception as e:
-            err = str(e).lower()
-            if "429" in err or "too many" in err or "rate" in err:
-                wait = (2 ** attempt) * random.uniform(5, 12)
-                push_log(f"  Rate-limited fetching {app_id}. Waiting {wait:.0f}s ...")
-                if stop_event.wait(wait):
-                    return None
-            else:
-                if stop_event.wait(2):
-                    return None
-    return None
-
 
 # ── Google Sheet via Apps Script ──────────────────────────────────────────────
 def sheet_post(payload: dict):
@@ -328,15 +205,14 @@ def ai_gen_keywords(original: str, used: list, hunter: dict = None) -> list:
             f"You are a Google Play Store keyword expert.\n"
             f"MAIN TOPIC/NICHE: \"{original}\"\n"
             f"Already used (DO NOT repeat): {used_str}\n\n"
-            f"GOAL: Find STRUGGLING indie/small-developer apps in the '{original}' niche "
+            f"GOAL: Find STRUGGLING apps in the '{original}' niche "
             f"with fewer than {max_inst:,} installs and rating at or below {max_score}.\n\n"
             f"RULES:\n"
             f"1. Generate 15 specific keyword phrases (2-4 words each)\n"
             f"2. ALL keywords MUST stay within the '{original}' topic\n"
             f"3. Think: sub-features, specific tools, niche variants of '{original}' apps\n"
-            f"4. Prefer obscure / long-tail keywords that surface smaller indie apps\n"
-            f"5. NEVER jump to unrelated niches\n"
-            f"6. Do NOT repeat anything already used\n"
+            f"4. NEVER jump to unrelated niches\n"
+            f"5. Do NOT repeat anything already used\n"
             f"Return ONLY a JSON array of strings. No explanation."
         )
     else:
@@ -344,14 +220,13 @@ def ai_gen_keywords(original: str, used: list, hunter: dict = None) -> list:
             f"You are a Google Play Store keyword expert.\n"
             f"MAIN TOPIC/NICHE: '{original}'\n"
             f"Already used: {used_str}\n\n"
-            f"Generate 15 NEW keyword phrases to find BRAND NEW indie apps "
-            f"(zero reviews, no rating yet, under 5000 installs) in the '{original}' niche.\n\n"
+            f"Generate 15 NEW keyword phrases to find BRAND NEW apps "
+            f"(zero reviews, no rating yet) in the '{original}' niche.\n\n"
             f"RULES:\n"
             f"1. ALL keywords must stay within the '{original}' niche\n"
             f"2. Cover sub-features, use-cases, niche variants\n"
-            f"3. Prefer long-tail obscure keywords that surface tiny indie apps\n"
-            f"4. NEVER jump to unrelated topics\n"
-            f"5. Do NOT repeat anything already used\n"
+            f"3. NEVER jump to unrelated topics\n"
+            f"4. Do NOT repeat anything already used\n"
             f"Return ONLY a JSON array of strings, nothing else."
         )
 
@@ -543,28 +418,18 @@ RULES:
         return prefilled_sub, prefilled_bod
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ── PLAY STORE SCRAPER ────────────────────────────────────────────────────────
-# ══════════════════════════════════════════════════════════════════════════════
+# ── Play Store scraper ────────────────────────────────────────────────────────
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
-# Reduced combo list — fewer countries = fewer requests = less bot detection.
-# We still cover major English markets but don't hammer all 13 at once.
 SEARCH_COMBOS = [
     ("en", "us"), ("en", "gb"), ("en", "in"), ("en", "au"), ("en", "ca"),
 ]
 
-# Hunter mode uses more combos to cast a wider net for rated apps
 HUNTER_SEARCH_COMBOS = [
     ("en", "us"), ("en", "gb"), ("en", "au"), ("en", "ca"), ("en", "nz"),
     ("en", "sg"), ("en", "za"), ("en", "ng"), ("en", "gh"), ("en", "ke"),
     ("en", "ph"), ("en", "my"), ("en", "in"),
 ]
-
-# Inter-keyword delay range (seconds) — wait between finishing one keyword and
-# starting the next so Play Store doesn't see a constant stream of requests.
-KEYWORD_DELAY_MIN = 8
-KEYWORD_DELAY_MAX = 20
 
 
 def extract_email(text):
@@ -577,50 +442,46 @@ def extract_email(text):
 def passes_filter(installs: int, score, ratings_count: int, hunter: dict) -> bool:
     """
     ╔══════════════════════════════════════════════════════════════════╗
-    ║  NORMAL MODE — Brand-new INDIE apps only (zero reviews)          ║
-    ║  • score must be None / 0.0  (no rating on Play Store)           ║
-    ║  • ratings_count must be 0   (double confirmation)               ║
-    ║  • installs: 500 – 5,000     (real users, still very small)      ║
-    ║    < 500  → too new, no real users                               ║
-    ║    > 5k   → not new/small anymore                                ║
-    ║  • Big-company apps are filtered in scrape_keyword()             ║
+    ║  NORMAL MODE — Brand-new apps only (zero reviews)               ║
+    ║  • score must be None or 0.0  (no rating on Play Store)         ║
+    ║  • ratings_count must be 0    (double confirmation: no reviews) ║
+    ║  • installs: 500 – 10,000     (real users, still small)         ║
+    ║    < 500  → too new, no real users, won't buy                   ║
+    ║    > 10k  → not new anymore                                     ║
     ╠══════════════════════════════════════════════════════════════════╣
-    ║  HUNTER MODE — Struggling INDIE rated apps only                  ║
-    ║  • Must have a REAL visible score (score > 0, not None)          ║
-    ║    NOTE: score is NOT zeroed out in hunter mode — we keep it!    ║
-    ║  • score <= user-set max_score (default 2.5)                     ║
-    ║  • installs <= user-set max_installs (default 5,000)             ║
-    ║  • installs >= 100  (avoid ghost apps)                           ║
-    ║  • Brand-new / unrated apps are EXCLUDED from Hunter mode        ║
-    ║  • Big-company apps are filtered in scrape_keyword()             ║
+    ║  HUNTER MODE — Struggling rated apps only                       ║
+    ║  • Must have a real score (not None/0)                          ║
+    ║  • score <= user-set max_score                                  ║
+    ║  • installs <= user-set max_installs                            ║
+    ║  • installs >= 100  (avoid ghost apps)                          ║
+    ║  • Brand-new / unrated apps are EXCLUDED from Hunter mode       ║
     ╚══════════════════════════════════════════════════════════════════╝
     """
     if hunter and hunter.get("active"):
         max_inst  = int(hunter.get("max_installs") or 5000)
         max_score = float(hunter.get("max_score") or 2.5)
 
-        # Hunter strictly needs a real, visible rating
-        if score is None or float(score) <= 0.0:
+        # Hunter needs a real, visible rating
+        if score is None or float(score) == 0.0:
             return False   # unrated → not for Hunter mode
         if float(score) > max_score:
             return False
         if installs > max_inst:
             return False
         if installs < 100:
-            return False   # ghost app / zero real users
+            return False   # ghost app / not real
         return True
 
     # ── Normal mode: brand-new apps with zero reviews ─────────────────────────
     if score is not None and float(score) > 0:
-        return False   # has a real rating → skip
+        return False   # has a rating → already reviewed → skip
     if ratings_count > 0:
         return False   # has reviews even if score shows 0 → skip
 
-    # ★ CHANGED: hard cap at 5,000 installs (was 10,000)
     if installs < 500:
         return False   # too tiny — won't invest in a service
-    if installs > 5_000:
-        return False   # not "new/small" anymore
+    if installs > 10_000:
+        return False   # not new anymore
 
     return True
 
@@ -631,13 +492,6 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
       Layer 1 — global_seen_ids / global_seen_emails  (in-memory, this session)
       Layer 2 — sheet_known_ids / sheet_known_emails  (pre-loaded from sheet)
       Layer 3 — register_in_sheet_cache() after collecting, so later keywords skip it
-
-    Anti-bot measures:
-      • safe_search()  — retry + exponential backoff on 429s
-      • safe_app_detail() — retry + backoff on detail fetches
-      • human_delay() between detail fetches
-      • Randomized combo order so country rotation pattern varies
-      • jitter_delay() between countries
     """
     global global_seen_ids, global_seen_emails
     push_log(f"Scraping: '{keyword}'")
@@ -646,19 +500,13 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
     combos         = HUNTER_SEARCH_COMBOS if (hunter and hunter.get("active")) else SEARCH_COMBOS
     keyword_tokens = build_keyword_tokens(keyword)
 
-    # Randomize order of combos each keyword — avoids predictable pattern
-    combos_shuffled = list(combos)
-    random.shuffle(combos_shuffled)
-
-    for lang, country in combos_shuffled:
+    for lang, country in combos:
         if stop_event.is_set():
             break
-
-        # Human-like pause before each country search
-        jitter_delay(base=2.0, spread=1.5)
-
-        results = safe_search(keyword, lang=lang, country=country, n_hits=200)
-        if not results:
+        try:
+            results = search(keyword, lang=lang, country=country, n_hits=500)
+        except Exception as e:
+            push_log(f"  Search error ({country}): {e}")
             continue
 
         for item in results:
@@ -671,49 +519,25 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
 
             global_seen_ids.add(app_id)  # mark seen immediately
 
-            # Human-like delay before each detail fetch
-            human_delay(min_s=1.0, max_s=3.5)
-
-            details = safe_app_detail(app_id)
-            if details is None:
+            try:
+                details = gp_app(app_id, lang="en", country="us")
+            except Exception:
                 continue
 
             installs      = details.get("minInstalls") or 0
-            ratings_count = details.get("ratings") or 0   # total review count
+            score         = details.get("score")          # float | None
+            ratings_count = details.get("ratings") or 0   # int — total review count
 
-            # ── Score handling ─────────────────────────────────────────────
-            # CRITICAL FIX for Hunter mode:
-            #   Original code zeroed score → None when score == 0.0
-            #   This broke Hunter mode because rated apps fetched as 0.0
-            #   were silently converted to None and then excluded.
-            #
-            #   Fix: Only zero out score in NORMAL mode (where we want to
-            #   exclude rated apps). In Hunter mode we keep the raw score.
-            raw_score = details.get("score")   # float | None from scraper
-
-            if hunter and hunter.get("active"):
-                # Hunter: keep score as-is (we WANT rated apps)
-                score = raw_score
-            else:
-                # Normal: treat 0.0 as no-rating (same as before)
-                if raw_score is not None and float(raw_score) == 0.0:
-                    score = None
-                else:
-                    score = raw_score
+            # Treat 0.0 exactly like None (Play Store shows no rating)
+            if score is not None and float(score) == 0.0:
+                score = None
 
             if not passes_filter(installs, score, ratings_count, hunter):
                 continue
 
-            # ── Big company filter ─────────────────────────────────────────
-            developer = details.get("developer", "") or ""
-            app_name  = details.get("title", "")      or ""
-            if is_big_company(developer, app_name):
-                push_log(f"  Big company — skipping: {app_name} by {developer}")
-                continue
-
             # Relevance guard — app should match the keyword niche
             if keyword_tokens and not is_keyword_relevant(
-                app_name,
+                details.get("title", ""),
                 details.get("description", ""),
                 details.get("genre", ""),
                 keyword_tokens,
@@ -731,14 +555,14 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
 
             # Layer-2: sheet cache check
             if is_sheet_duplicate(app_id, email):
-                push_log(f"  Already in sheet, skipping: {app_name}")
+                push_log(f"  Already in sheet, skipping: {details.get('title', app_id)}")
                 global_seen_emails.add(email)
                 continue
 
             lead = {
                 "app_id":        app_id,
-                "app_name":      app_name,
-                "developer":     developer,
+                "app_name":      details.get("title", ""),
+                "developer":     details.get("developer", ""),
                 "email":         email,
                 "category":      details.get("genre", ""),
                 "installs":      installs,
@@ -756,19 +580,17 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
             register_in_sheet_cache(app_id, email)  # Layer-3
 
             mode_tag  = "HUNTER" if (hunter and hunter.get("active")) else "NORMAL"
-            score_str = f"{score:.1f}★ " if score else "no-rating"
+            score_str = f"{score:.1f}* " if score else "no-rating"
             push_log(
-                f"  ✓ [{mode_tag}] {app_name} | "
+                f"  OK [{mode_tag}] {lead['app_name']} | "
                 f"{installs:,} installs | {score_str}| {ratings_count} reviews | {email}"
             )
 
-            if stop_event.wait(0.1):
+            if stop_event.wait(0.25):
                 break
 
         push_log(f"  [{country}] done. Leads so far: {len(leads)}")
-
-        # Longer jitter between countries to avoid bot fingerprinting
-        if stop_event.wait(random.uniform(3.0, 7.0)):
+        if stop_event.wait(0.5):
             break
 
     push_log(f"  {len(leads)} new leads from '{keyword}'")
@@ -1028,12 +850,6 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
             sheet_append_qualified(lead)
 
         push_log(f"Total: {len(all_leads)} / {target}")
-
-        # ── Anti-bot: mandatory inter-keyword cooldown ─────────────────────
-        if not stop_event.is_set() and kw_queue:
-            wait = random.uniform(KEYWORD_DELAY_MIN, KEYWORD_DELAY_MAX)
-            push_log(f"  Cooling down {wait:.0f}s before next keyword (anti-bot)...")
-            stop_event.wait(wait)
 
     if stop_event.is_set():
         push_log("Stopped during scraping.")
