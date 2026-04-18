@@ -14,8 +14,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 # ── Shared state ──────────────────────────────────────────────────────────────
-stop_event = threading.Event()
-state_lock = threading.Lock()
+stop_event  = threading.Event()
+state_lock  = threading.Lock()
 state = {
     "running": False, "phase": "idle", "keyword": "",
     "keywords_used": [], "leads_found": 0, "emails_sent": 0,
@@ -23,14 +23,20 @@ state = {
 }
 
 # ── Global duplicate tracker — persists across runs until /api/clear ─────────
-global_seen_ids:    set = set()
-global_seen_emails: set = set()
+# Only tracks QUALIFIED leads (email found + passed filter).
+# Apps with no email are tracked in the Scraped Apps sheet, NOT here,
+# so they can be re-checked in future runs if an email appears.
+global_seen_ids:    set = set()   # app_ids of qualified leads (email found)
+global_seen_emails: set = set()   # emails of qualified leads
 
 # ── Sheet duplicate cache — loaded once per automation run ───────────────────
-sheet_known_ids:    set  = set()
-sheet_known_emails: set  = set()
-sheet_cache_loaded: bool = False
-sheet_cache_lock         = threading.Lock()
+# Covers: qualified lead app_ids, qualified lead emails, AND all scraped app_ids
+# so we never re-fetch details for an app we already processed this run.
+sheet_known_ids:         set  = set()   # qualified lead app_ids from sheet
+sheet_known_emails:      set  = set()   # qualified lead emails from sheet
+sheet_scraped_ids:       set  = set()   # ALL app_ids ever scraped (Scraped Apps tab)
+sheet_cache_loaded:      bool = False
+sheet_cache_lock              = threading.Lock()
 
 # ── Email cooldown state ──────────────────────────────────────────────────────
 email_state_lock       = threading.Lock()
@@ -108,29 +114,29 @@ def sheet_post(payload: dict):
 
 def sheet_append_lead(lead: dict):
     sheet_post({"action": "append", "tab": "All Leads", "row": {
-        "App Name": lead["app_name"], "Developer": lead["developer"],
-        "Email": lead["email"], "Category": lead["category"],
-        "Installs": lead["installs"], "Score": lead["score"] or "",
-        "URL": lead["url"], "Keyword": lead["keyword"],
+        "App Name":   lead["app_name"],   "Developer": lead["developer"],
+        "Email":      lead["email"],       "Category":  lead["category"],
+        "Installs":   lead["installs"],    "Score":     lead["score"] or "",
+        "URL":        lead["url"],         "Keyword":   lead["keyword"],
         "Scraped At": lead["scraped_at"], "Email Sent": "No",
-        "App ID": lead["app_id"],
+        "App ID":     lead["app_id"],
     }})
 
 def sheet_append_qualified(lead: dict):
     sheet_post({"action": "append", "tab": "Qualified Leads", "row": {
-        "App Name": lead["app_name"], "Developer": lead["developer"],
-        "Email": lead["email"], "Category": lead["category"],
-        "Installs": lead["installs"], "Score": lead["score"] or "",
-        "URL": lead["url"], "Keyword": lead["keyword"],
+        "App Name":   lead["app_name"],   "Developer": lead["developer"],
+        "Email":      lead["email"],       "Category":  lead["category"],
+        "Installs":   lead["installs"],    "Score":     lead["score"] or "",
+        "URL":        lead["url"],         "Keyword":   lead["keyword"],
         "Scraped At": lead["scraped_at"], "Email Sent": "Pending",
-        "App ID": lead["app_id"],
+        "App ID":     lead["app_id"],
     }})
 
 def sheet_mark_sent(app_id: str, email: str, app_name: str):
     sheet_post({"action": "mark_sent", "app_id": app_id, "email": email, "app_name": app_name})
     sheet_post({"action": "append", "tab": "Email Sent", "row": {
         "App ID": app_id, "App Name": app_name,
-        "Email": email, "Sent At": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "Email":  email,  "Sent At":  time.strftime("%Y-%m-%d %H:%M:%S"),
     }})
 
 def sheet_log_keyword(keyword: str, count: int):
@@ -139,18 +145,86 @@ def sheet_log_keyword(keyword: str, count: int):
         "Logged At": time.strftime("%Y-%m-%d %H:%M:%S"),
     }})
 
+# ── NEW: Scraped Apps tab helpers ─────────────────────────────────────────────
+# Every app we fetch details for is recorded here with its outcome status:
+#   "qualified"  — passed filter + has email → sent to Qualified Leads
+#   "no_email"   — passed filter but no email found
+#   "filtered"   — failed mode filter (wrong install count / score / etc.)
+#   "no_detail"  — Play Store detail fetch returned None
+#
+# On the NEXT run, we skip apps whose status is "qualified" or "filtered"
+# (they won't change). We DO re-check "no_email" apps — the developer may
+# have added an email since we last checked.
+# ─────────────────────────────────────────────────────────────────────────────
+
+SKIP_STATUSES = {"qualified", "filtered", "no_detail"}  # never re-process these
+RECHECK_STATUS = "no_email"                               # worth re-checking later
+
+def sheet_record_scraped(app_id: str, app_name: str, status: str,
+                          installs: int = 0, score=None,
+                          category: str = "", keyword: str = ""):
+    """
+    Write one row to the 'Scraped Apps' tab.
+    Called for EVERY app whose detail we fetch, regardless of outcome.
+    """
+    sheet_post({"action": "append", "tab": "Scraped Apps", "row": {
+        "App ID":     app_id,
+        "App Name":   app_name,
+        "Status":     status,
+        "Installs":   installs,
+        "Score":      score if score else "",
+        "Category":   category,
+        "Keyword":    keyword,
+        "Checked At": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }})
+
+def sheet_load_scraped_ids() -> set:
+    """
+    Load all app_ids from 'Scraped Apps' tab that have a SKIP_STATUS.
+    These will not be re-fetched in this run.
+    Returns a set of app_id strings.
+    """
+    url = get_cfg("APPS_SCRIPT_WEB_URL")
+    if not url:
+        return set()
+    try:
+        r      = requests.post(url, json={"action": "get_scraped_apps"}, timeout=30)
+        rows   = (r.json() if r.text else {}).get("apps", [])
+        skip   = set()
+        recheck = 0
+        for row in rows:
+            aid    = (row.get("App ID") or "").strip()
+            status = (row.get("Status") or "").strip().lower()
+            if aid and status in SKIP_STATUSES:
+                skip.add(aid)
+            elif aid and status == RECHECK_STATUS:
+                recheck += 1
+        push_log(f"  Scraped Apps DB: {len(skip)} to skip, {recheck} 'no_email' eligible for recheck")
+        return skip
+    except Exception as e:
+        push_log(f"  Could not load Scraped Apps tab: {e}")
+        return set()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ── SHEET DUPLICATE CACHE
-# Loaded ONCE per run. is_duplicate() covers session + sheet in one O(1) call.
-# register_seen() updates both caches simultaneously.
+# Loaded ONCE per run. is_duplicate() covers session memory + sheet in one
+# O(1) call.  register_seen() updates both caches simultaneously.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def load_sheet_duplicate_cache():
-    global sheet_known_ids, sheet_known_emails, sheet_cache_loaded
+    """
+    Load two kinds of data from the sheet:
+      1. Qualified lead app_ids + emails → is_duplicate() guard
+      2. All scraped app_ids with skip-eligible statuses → sheet_scraped_ids
+    Both are loaded in parallel to save time.
+    """
+    global sheet_known_ids, sheet_known_emails, sheet_scraped_ids, sheet_cache_loaded
+
     with sheet_cache_lock:
         sheet_known_ids    = set()
         sheet_known_emails = set()
+        sheet_scraped_ids  = set()
         sheet_cache_loaded = False
 
     url = get_cfg("APPS_SCRIPT_WEB_URL")
@@ -159,7 +233,9 @@ def load_sheet_duplicate_cache():
         with sheet_cache_lock: sheet_cache_loaded = True
         return
 
-    push_log("  Loading sheet for duplicate detection...")
+    push_log("  Loading sheet caches (qualified leads + scraped DB)...")
+
+    # Load qualified leads (for email/id dedup)
     try:
         r     = requests.post(url, json={"action": "get_all_leads"}, timeout=30)
         leads = (r.json() if r.text else {}).get("leads", [])
@@ -169,27 +245,52 @@ def load_sheet_duplicate_cache():
                 em  = (lead.get("Email")  or lead.get("email")  or "").strip().lower()
                 if aid: sheet_known_ids.add(aid)
                 if em:  sheet_known_emails.add(em)
-            sheet_cache_loaded = True
-        push_log(f"  Sheet cache: {len(sheet_known_ids)} app IDs, {len(sheet_known_emails)} emails — will skip all.")
+        push_log(f"  Qualified cache: {len(sheet_known_ids)} app IDs, {len(sheet_known_emails)} emails")
     except Exception as e:
-        push_log(f"  Sheet cache failed: {e} — continuing without it.")
-        with sheet_cache_lock: sheet_cache_loaded = True
+        push_log(f"  Qualified cache failed: {e}")
+
+    # Load scraped apps DB (for skipping already-processed apps)
+    scraped_skip = sheet_load_scraped_ids()
+    with sheet_cache_lock:
+        sheet_scraped_ids  = scraped_skip
+        sheet_cache_loaded = True
+
+    push_log(f"  Scraped DB cache: {len(sheet_scraped_ids)} apps will be skipped this run")
+
 
 def is_duplicate(app_id: str, email: str) -> bool:
-    """Single call checks session memory + sheet cache."""
+    """Check if this QUALIFIED lead already exists (session + sheet cache)."""
     el = email.lower()
     if app_id in global_seen_ids or el in global_seen_emails:
         return True
     with sheet_cache_lock:
         return app_id in sheet_known_ids or el in sheet_known_emails
 
+def is_already_scraped(app_id: str) -> bool:
+    """
+    Check if this app has already been fully processed in a previous run
+    with a status that means we should skip it (qualified / filtered / no_detail).
+    'no_email' apps are NOT skipped — we recheck them.
+    """
+    with sheet_cache_lock:
+        return app_id in sheet_scraped_ids
+
 def register_seen(app_id: str, email: str):
-    """Update session + sheet cache simultaneously."""
+    """Update session + sheet cache when a qualified lead is found."""
     global_seen_ids.add(app_id)
     global_seen_emails.add(email.lower())
     with sheet_cache_lock:
         sheet_known_ids.add(app_id)
         sheet_known_emails.add(email.lower())
+
+def register_scraped(app_id: str, status: str):
+    """
+    Update the in-memory scraped cache immediately after recording to sheet.
+    Only adds to skip set if the status warrants skipping on future runs.
+    """
+    if status in SKIP_STATUSES:
+        with sheet_cache_lock:
+            sheet_scraped_ids.add(app_id)
 
 
 # ── Keyword relevance ─────────────────────────────────────────────────────────
@@ -396,32 +497,33 @@ RULES:
 # ══════════════════════════════════════════════════════════════════════════════
 # ── CORE SCRAPING ARCHITECTURE
 #
-# NEW DESIGN — "Search First, Filter Later":
+# DESIGN — "Search First, Persistent DB Filter, Then Process":
 #
-#   Step 1. SEARCH — For a keyword, collect all app IDs from Play Store search
-#           across country combos. Store unique IDs in a pool. No detail fetch yet.
+#   Step 1. SEARCH — Collect all app IDs from Play Store search across country
+#           combos for a keyword. Store unique IDs in a pool.
 #
-#   Step 2. FETCH DETAILS — For each app ID in the pool, fetch full details
-#           in parallel (ThreadPoolExecutor, max 5 workers) with small delays
-#           to avoid rate limiting. This is much faster than sequential.
+#   Step 2. FILTER POOL — Remove app IDs that were already processed in a
+#           previous run with a permanent-skip status (qualified/filtered/
+#           no_detail). Apps with "no_email" status ARE included for recheck.
 #
-#   Step 3. FILTER — Apply mode-specific filter to fetched details:
-#           • Normal mode: score must be genuinely None/0 (no rating at all),
-#             ratings_count must be 0, installs 500–5000.
-#           • Hunter mode: must have a real positive score, score ≤ max_score,
-#             installs within range.
+#   Step 3. FETCH DETAILS — For each remaining app ID, fetch full details in
+#           parallel (ThreadPoolExecutor, max 5 workers) with small delays.
 #
-#   Step 4. DEDUP — Check against session + sheet cache. Collect email.
+#   Step 4. FILTER — Apply mode-specific filter to fetched details.
 #
-# WHY THIS FIXES HUNTER MODE:
-#   Previously, score was zeroed BEFORE the filter in some code paths.
-#   Now, raw score from Play Store is used as-is in ALL filter decisions.
-#   Hunter filter explicitly requires score > 0 — unrated apps are excluded.
+#   Step 5. DEDUP — Check qualified leads cache (session + sheet).
 #
-# WHY NORMAL MODE NOW SHOWS CORRECT RATING:
-#   We fetch FRESH details and use the raw score directly. If Play Store says
-#   the app has a rating, we respect that and skip it in normal mode.
-#   No more false "no rating" leads.
+#   Step 6. RECORD — Write every processed app to "Scraped Apps" tab with its
+#           outcome status so future runs can skip or recheck intelligently.
+#
+# KEY IMPROVEMENTS OVER OLD DESIGN:
+#   • Apps without email are recorded as "no_email" in sheet and NOT added to
+#     global_seen_ids. On next run they get rechecked (email may have appeared).
+#   • Apps that fail the mode filter are recorded as "filtered" and permanently
+#     skipped — they will never match our criteria.
+#   • Apps where detail fetch fails are recorded as "no_detail" and skipped.
+#   • global_seen_ids now ONLY tracks qualified leads (email found + filtered).
+#   • Automation continues cycling through new keywords until target is hit.
 # ══════════════════════════════════════════════════════════════════════════════
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
@@ -454,13 +556,10 @@ def _passes_normal(score_raw, ratings_count: int, installs: int) -> bool:
     • installs: 500–5000
     Uses raw score directly from Play Store — no conversion applied beforehand.
     """
-    # Has a real published rating → NOT a new app → skip
     if score_raw is not None and float(score_raw) > 0:
         return False
-    # Has reviews even without a visible score → skip
     if ratings_count > 0:
         return False
-    # Install range: must be real users but still small
     if installs < 500 or installs > 5_000:
         return False
     return True
@@ -480,9 +579,9 @@ def _passes_hunter(score_raw, installs: int, max_score: float, max_inst: int) ->
         s = float(score_raw)
     except (TypeError, ValueError):
         return False
-    if s <= 0:          return False   # no real rating
-    if s > max_score:   return False   # too highly rated
-    if installs < 100:  return False   # ghost app
+    if s <= 0:              return False
+    if s > max_score:       return False
+    if installs < 100:      return False
     if installs > max_inst: return False
     return True
 
@@ -513,7 +612,6 @@ def _collect_app_ids_for_keyword(keyword: str, combos: list) -> list:
 
         push_log(f"  [{country}] {len(results)} results, {new_ids} new IDs (pool: {len(app_ids)})")
 
-        # Brief pause between countries
         if stop_event.wait(random.uniform(1.0, 2.5)):
             break
 
@@ -523,7 +621,6 @@ def _collect_app_ids_for_keyword(keyword: str, combos: list) -> list:
 
 def _fetch_one_detail(app_id: str) -> tuple[str, dict | None]:
     """Fetch details for one app. Returns (app_id, details_or_None)."""
-    # Small random stagger so parallel workers don't all fire at once
     time.sleep(random.uniform(0.1, 0.6))
     details = safe_app_detail(app_id)
     return app_id, details
@@ -532,26 +629,51 @@ def _fetch_one_detail(app_id: str) -> tuple[str, dict | None]:
 def _process_pool(app_ids: list, keyword: str, hunter: dict,
                   keyword_tokens: list) -> list:
     """
-    Step 2+3+4: Parallel detail fetch → filter → dedup → collect leads.
+    Steps 2–6: Filter pool → parallel detail fetch → mode filter →
+    dedup → record to Scraped Apps tab → collect qualified leads.
 
-    For each app ID in the pool:
-      - Fetch details in parallel (DETAIL_WORKERS threads)
-      - Apply mode filter using RAW score from Play Store
-      - Check duplicate (session + sheet)
-      - Extract email
-      - Build lead dict
+    Status values written to Scraped Apps:
+      "qualified"  — passed all checks, has email → lead created
+      "no_email"   — passed filter but no email found → will recheck next run
+      "filtered"   — failed mode/relevance filter → skip permanently
+      "no_detail"  — Play Store returned None → skip permanently
     """
     global global_seen_ids, global_seen_emails
 
-    is_hunter   = bool(hunter and hunter.get("active"))
-    max_inst    = int(hunter.get("max_installs")  or 5000)  if is_hunter else 5000
-    max_score   = float(hunter.get("max_score")   or 2.5)   if is_hunter else 0.0
-    leads       = []
-    fetch_lock  = threading.Lock()
+    is_hunter = bool(hunter and hunter.get("active"))
+    max_inst  = int(hunter.get("max_installs")  or 5000)  if is_hunter else 5000
+    max_score = float(hunter.get("max_score")   or 2.5)   if is_hunter else 0.0
+    leads     = []
+    fetch_lock = threading.Lock()
 
-    # Filter out app IDs already seen before launching threads
-    to_fetch = [aid for aid in app_ids if aid not in global_seen_ids]
+    # ── Step 2: Remove already-permanently-processed app IDs ──────────────────
+    # Also skip ones seen as qualified in THIS session (global_seen_ids).
+    # "no_email" apps are NOT in sheet_scraped_ids, so they pass through.
+    pre_filter_count = len(app_ids)
+    to_fetch = [
+        aid for aid in app_ids
+        if aid not in global_seen_ids and not is_already_scraped(aid)
+    ]
+    skipped = pre_filter_count - len(to_fetch)
+    if skipped:
+        push_log(f"  Skipped {skipped} already-processed app IDs (DB + session)")
     push_log(f"  Fetching details for {len(to_fetch)} apps ({DETAIL_WORKERS} parallel workers)...")
+
+    # Batch recording to sheet — collect and write after thread pool to avoid
+    # hammering the Apps Script endpoint from multiple threads simultaneously.
+    scrape_records: list[dict] = []   # [{app_id, app_name, status, ...}]
+    scrape_records_lock = threading.Lock()
+
+    def _record(app_id: str, app_name: str, status: str,
+                installs: int = 0, score=None, category: str = ""):
+        with scrape_records_lock:
+            scrape_records.append({
+                "app_id": app_id, "app_name": app_name, "status": status,
+                "installs": installs, "score": score,
+                "category": category, "keyword": keyword,
+            })
+        # Update in-memory cache immediately so later threads see it
+        register_scraped(app_id, status)
 
     with ThreadPoolExecutor(max_workers=DETAIL_WORKERS) as executor:
         futures = {executor.submit(_fetch_one_detail, aid): aid for aid in to_fetch}
@@ -563,53 +685,60 @@ def _process_pool(app_ids: list, keyword: str, hunter: dict,
 
             app_id, details = future.result()
 
-            with fetch_lock:
-                # Mark seen immediately (thread-safe)
-                global_seen_ids.add(app_id)
-
             if details is None:
+                # Play Store could not return detail — record and skip
+                _record(app_id, app_id, "no_detail")
                 continue
 
-            # ── Raw values from Play Store — used as-is ───────────────────
+            # ── Raw values from Play Store ────────────────────────────────────
             installs      = details.get("minInstalls") or 0
             ratings_count = details.get("ratings")     or 0
-            score_raw     = details.get("score")           # float | None — NEVER modified
+            score_raw     = details.get("score")           # float | None
+            app_name      = details.get("title", app_id)
+            app_genre     = details.get("genre", "")
+            app_desc      = details.get("description", "")
 
-            # ── Mode filter ───────────────────────────────────────────────
+            # ── Mode filter ───────────────────────────────────────────────────
             if is_hunter:
-                if not _passes_hunter(score_raw, installs, max_score, max_inst):
-                    continue
+                passes = _passes_hunter(score_raw, installs, max_score, max_inst)
             else:
-                if not _passes_normal(score_raw, ratings_count, installs):
-                    continue
+                passes = _passes_normal(score_raw, ratings_count, installs)
 
-            app_name  = details.get("title", "")
-            app_genre = details.get("genre", "")
-            app_desc  = details.get("description", "")
-
-            # ── Keyword relevance (relaxed — any one token match) ──────────
-            if keyword_tokens and not is_keyword_relevant(app_name, app_genre, app_desc, keyword_tokens):
+            if not passes:
+                _record(app_id, app_name, "filtered", installs, score_raw, app_genre)
                 continue
 
-            # ── Email extraction ──────────────────────────────────────────
+            # ── Keyword relevance ─────────────────────────────────────────────
+            if keyword_tokens and not is_keyword_relevant(app_name, app_genre, app_desc, keyword_tokens):
+                _record(app_id, app_name, "filtered", installs, score_raw, app_genre)
+                continue
+
+            # ── Email extraction ──────────────────────────────────────────────
             email = (
                 extract_email(details.get("developerEmail", ""))
                 or extract_email(details.get("privacyPolicy", ""))
                 or extract_email(details.get("description", ""))
                 or extract_email(details.get("recentChanges", ""))
             )
+
             if not email:
+                # Passed filter but no email — record for recheck, do NOT add
+                # to global_seen_ids so future runs can find a newly added email.
+                _record(app_id, app_name, "no_email", installs, score_raw, app_genre)
+                push_log(f"  ⚠ no_email (recheck later): {app_name}")
                 continue
 
-            # ── Dedup (session + sheet, O(1)) ─────────────────────────────
+            # ── Dedup against qualified leads (session + sheet) ───────────────
             if is_duplicate(app_id, email):
                 push_log(f"  ⟳ dup: {app_name}")
+                # Still record as "qualified" so we don't re-process next run
+                _record(app_id, app_name, "qualified", installs, score_raw, app_genre)
                 continue
 
-            # ── Register + build lead ─────────────────────────────────────
+            # ── All checks passed — build lead ────────────────────────────────
             register_seen(app_id, email)
+            _record(app_id, app_name, "qualified", installs, score_raw, app_genre)
 
-            # Score stored as-is — exactly what Play Store returned
             lead = {
                 "app_id":        app_id,
                 "app_name":      app_name,
@@ -617,7 +746,7 @@ def _process_pool(app_ids: list, keyword: str, hunter: dict,
                 "email":         email,
                 "category":      app_genre,
                 "installs":      installs,
-                "score":         score_raw,      # raw Play Store score — no conversion
+                "score":         score_raw,
                 "ratings_count": ratings_count,
                 "description":   (app_desc or "")[:300],
                 "url":           f"https://play.google.com/store/apps/details?id={app_id}",
@@ -637,6 +766,22 @@ def _process_pool(app_ids: list, keyword: str, hunter: dict,
                 f"{installs:,} inst | {score_str} | {ratings_count} rev | {email}"
             )
 
+    # ── Batch write all scrape records to sheet (sequential, outside thread pool) ──
+    if scrape_records:
+        push_log(f"  Writing {len(scrape_records)} records to Scraped Apps DB...")
+        for rec in scrape_records:
+            if stop_event.is_set():
+                break
+            sheet_record_scraped(
+                app_id   = rec["app_id"],
+                app_name = rec["app_name"],
+                status   = rec["status"],
+                installs = rec["installs"],
+                score    = rec["score"],
+                category = rec["category"],
+                keyword  = rec["keyword"],
+            )
+
     return leads
 
 
@@ -644,21 +789,20 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
     """
     Full scrape for one keyword:
       1. Collect app IDs across country combos (search phase)
-      2. Fetch details in parallel + filter + dedup (process phase)
+      2. Filter already-processed IDs via Scraped Apps DB
+      3. Fetch details in parallel + filter + dedup + record (process phase)
     """
     push_log(f"▶ Keyword: '{keyword}'")
 
     combos         = HUNTER_SEARCH_COMBOS if (hunter and hunter.get("active")) else SEARCH_COMBOS
     keyword_tokens = build_keyword_tokens(keyword)
 
-    # Step 1 — gather app ID pool
     app_ids = _collect_app_ids_for_keyword(keyword, combos)
     if not app_ids:
         push_log(f"  No results for '{keyword}'")
         sheet_log_keyword(keyword, 0)
         return []
 
-    # Step 2 — fetch details + filter + dedup
     leads = _process_pool(app_ids, keyword, hunter or {}, keyword_tokens)
 
     push_log(f"  '{keyword}' → {len(leads)} new leads from {len(app_ids)} apps checked")
@@ -860,6 +1004,7 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
     mode = "Hunter" if (hunter and hunter.get("active")) else "Normal"
     push_log(f"▶ Started | kw='{initial_kw}' | target={target} | mode={mode}")
 
+    # Load both qualified-leads dedup cache AND scraped-apps DB
     load_sheet_duplicate_cache()
 
     base_subject = get_cfg("EMAIL_SUBJECT") or ""
@@ -895,8 +1040,7 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
 
         push_log(f"Total: {len(all_leads)} / {target}")
 
-        # Short inter-keyword pause
-        if not stop_event.is_set() and kw_queue:
+        if not stop_event.is_set() and (kw_queue or len(all_leads) < target):
             wait = random.uniform(3, 8)
             push_log(f"  Pausing {wait:.0f}s before next keyword...")
             stop_event.wait(wait)
@@ -1125,6 +1269,49 @@ def api_send_single():
 
     threading.Thread(target=_send_single, args=(lead,), daemon=True).start()
     return jsonify({"ok": True, "app_id": lead["app_id"], "email": lead["email"]})
+
+# ── NEW: Scraped Apps DB API endpoints ───────────────────────────────────────
+@application.route("/api/scraped_stats", methods=["POST"])
+def api_scraped_stats():
+    """Return stats about the Scraped Apps DB tab."""
+    data      = request.get_json(silent=True) or {}
+    sheet_url = data.get("sheet_url") or os.environ.get("APPS_SCRIPT_WEB_URL", "")
+    if not sheet_url:
+        return jsonify({"error": "sheet_url not set"}), 400
+    try:
+        r    = requests.post(sheet_url, json={"action": "get_scraped_apps"}, timeout=30)
+        rows = (r.json() if r.text else {}).get("apps", [])
+        counts = {"qualified": 0, "no_email": 0, "filtered": 0, "no_detail": 0, "total": len(rows)}
+        for row in rows:
+            status = (row.get("Status") or "").strip().lower()
+            if status in counts: counts[status] += 1
+        return jsonify({"ok": True, **counts})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@application.route("/api/clear_scraped_db", methods=["POST"])
+def api_clear_scraped_db():
+    """
+    Clear the Scraped Apps DB tab from the sheet.
+    Use this when you want a completely fresh scrape ignoring all history.
+    """
+    with state_lock:
+        if state["running"]:
+            return jsonify({"error": "Cannot clear while running"}), 409
+    data      = request.get_json(silent=True) or {}
+    sheet_url = data.get("sheet_url") or os.environ.get("APPS_SCRIPT_WEB_URL", "")
+    if not sheet_url:
+        return jsonify({"error": "sheet_url not set"}), 400
+    try:
+        r      = requests.post(sheet_url, json={"action": "clear_scraped_apps"}, timeout=20)
+        result = r.json() if r.text else {}
+        # Also clear in-memory scraped cache
+        with sheet_cache_lock:
+            sheet_scraped_ids.clear()
+        push_log("Scraped Apps DB cleared.")
+        return jsonify({"ok": True, "msg": result.get("msg", "Cleared")})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
