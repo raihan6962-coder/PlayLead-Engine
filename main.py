@@ -27,34 +27,27 @@ state = {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# In-memory caches — three separate sets with different purposes
+# In-memory caches
 #
 #  qualified_ids / qualified_emails
-#      Tracks confirmed qualified leads (email found + filter passed).
-#      Used ONLY for deduplication — never send two emails to the same app
-#      or the same email address.
-#      Populated from "All Leads" sheet tab at every run start.
-#      Persists until /api/clear is called.
+#      Confirmed qualified leads (email found + filter passed).
+#      Used ONLY for deduplication — never send two emails to same app/email.
+#      Populated from "All Leads" sheet at run start. Persists until /api/clear.
 #
 #  scraped_skip_ids
-#      Tracks app IDs already permanently processed in a previous run.
+#      App IDs already permanently processed in a previous run.
 #      Status "qualified", "filtered", "no_detail" → add here → skip forever.
-#      Status "no_email" → NOT added here → rechecked every run
-#      (developer may have added an email since last check).
-#      Populated from "Scraped Apps" sheet tab at every run start.
+#      Status "no_email" → NOT added → rechecked every run (dev may have added email).
 #
-# THE KEY DESIGN RULE:
-#   An app ID only goes into scraped_skip_ids when its outcome is PERMANENT.
-#   A "no_email" result is NOT permanent — it is worth rechecking next run.
-#   Therefore "no_email" apps are never added to scraped_skip_ids, and will
-#   always be re-fetched and re-evaluated on the next automation run.
+# DESIGN RULE:
+#   An app ID only goes into scraped_skip_ids when outcome is PERMANENT.
+#   "no_email" is NOT permanent — worth rechecking next run.
 # ══════════════════════════════════════════════════════════════════════════════
 qualified_ids:    set = set()
 qualified_emails: set = set()
 scraped_skip_ids: set = set()
 
-# Sheet-loaded mirrors (merged into above at run start, kept separate so
-# /api/clear can reset session without affecting what the sheet knows)
+# Sheet-loaded mirrors
 sheet_qualified_ids:    set = set()
 sheet_qualified_emails: set = set()
 sheet_scraped_skip_ids: set = set()
@@ -224,21 +217,13 @@ def sheet_record_scraped(app_id: str, app_name: str, status: str,
 # Cache management
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Statuses that mean "never re-fetch this app again"
 _PERMANENT_SKIP_STATUSES = {"qualified", "filtered", "no_detail"}
 
 def load_caches_from_sheet():
     """
     Called once at the start of every automation run.
-
-    Loads two things from the sheet:
-      1. All qualified lead app_ids + emails from 'All Leads' tab.
-         → Used by is_duplicate() to avoid emailing the same app twice.
-      2. Permanent-skip app_ids from 'Scraped Apps' tab.
-         → Used by is_already_scraped() to skip re-fetching processed apps.
-
-    'no_email' apps are intentionally NOT loaded into the skip cache —
-    they get rechecked on every run in case the developer added an email.
+    Loads qualified lead dedup cache + permanent-skip scraped DB from sheet.
+    'no_email' apps are intentionally NOT loaded into skip cache.
     """
     global sheet_qualified_ids, sheet_qualified_emails
     global sheet_scraped_skip_ids, cache_loaded
@@ -289,9 +274,9 @@ def load_caches_from_sheet():
                     sheet_scraped_skip_ids.add(aid)
                     skip_n += 1
                 elif status == "no_email":
-                    recheck_n += 1   # intentionally NOT in skip cache
-        push_log(f"  Scraped DB: {skip_n} permanent-skip IDs loaded, "
-                 f"{recheck_n} 'no_email' apps will be rechecked this run.")
+                    recheck_n += 1  # intentionally NOT in skip cache
+        push_log(f"  Scraped DB: {skip_n} permanent-skip IDs, "
+                 f"{recheck_n} 'no_email' apps will be rechecked.")
     except Exception as e:
         push_log(f"  Scraped DB cache load failed: {e} — continuing without it.")
 
@@ -300,10 +285,6 @@ def load_caches_from_sheet():
 
 
 def is_duplicate(app_id: str, email: str) -> bool:
-    """
-    Returns True if this app_id OR email already exists as a qualified lead.
-    Checks both session cache (this run) and sheet cache (previous runs).
-    """
     el = email.strip().lower()
     if app_id in qualified_ids or el in qualified_emails:
         return True
@@ -311,17 +292,12 @@ def is_duplicate(app_id: str, email: str) -> bool:
         return app_id in sheet_qualified_ids or el in sheet_qualified_emails
 
 def is_already_scraped(app_id: str) -> bool:
-    """
-    Returns True if this app was already permanently processed in a previous run.
-    'no_email' apps return False — they are always eligible for rechecking.
-    """
     if app_id in scraped_skip_ids:
         return True
     with cache_lock:
         return app_id in sheet_scraped_skip_ids
 
 def register_qualified(app_id: str, email: str):
-    """Call when a lead is confirmed qualified. Updates both session + sheet caches."""
     qualified_ids.add(app_id)
     qualified_emails.add(email.strip().lower())
     with cache_lock:
@@ -329,7 +305,6 @@ def register_qualified(app_id: str, email: str):
         sheet_qualified_emails.add(email.strip().lower())
 
 def register_scraped_skip(app_id: str):
-    """Call when an app gets a permanent-skip status. Updates both caches."""
     scraped_skip_ids.add(app_id)
     with cache_lock:
         sheet_scraped_skip_ids.add(app_id)
@@ -337,33 +312,20 @@ def register_scraped_skip(app_id: str):
 # ══════════════════════════════════════════════════════════════════════════════
 # Mode filters
 #
-# NORMAL MODE — Brand-new apps with zero ratings:
-#   • score must be None or 0.0 — Play Store has published no rating yet
-#   • ratings must be 0 — absolutely no reviews
+# NORMAL MODE — Brand-new apps with ZERO ratings:
+#   • score must be None or 0.0  (no published rating yet)
+#   • ratings must be 0          (absolutely no reviews)
 #   • installs: 10–10,000
 #
-#   WHY min installs = 10:
-#     Play Store reports minInstalls=10 for apps right after first download.
-#     Setting 500 as minimum (previous bug) cut off the vast majority of new
-#     apps which all show as "10+" on the store. 10 is the real floor.
-#
-#   WHY max installs = 10,000:
-#     5,000 was too tight. Apps can grow quickly in their first weeks.
-#     10,000 is still clearly "small/new" and gives 2× more candidate apps.
-#
-# HUNTER MODE — Struggling apps with low ratings:
-#   • score must be > 0 — must have a real published rating (not unrated)
-#   • score ≤ max_score — rating is low (struggling app)
+# HUNTER MODE — Struggling apps with LOW ratings:
+#   • score must be > 0          (has a real published rating)
+#   • score ≤ max_score          (rating is low)
+#   • ratings_count > 0          (confirms it's actually rated)
 #   • installs: 50–max_inst
-#   • ratings_count > 0 — must have at least one review (confirms it's rated)
 #
-#   WHY we require score > 0 in hunter mode:
-#     Unrated apps (score=None or score=0) have no reviews — they belong in
-#     normal mode, not hunter mode. Hunter mode targets apps that HAVE been
-#     rated but got BAD ratings. Mixing the two produces wrong leads.
-#
-#   WHY min installs = 50 (was 100):
-#     Small struggling apps often have very few installs. 50 catches more.
+# The two modes do NOT overlap:
+#   Unrated apps  → normal mode only
+#   Rated apps    → hunter mode only
 # ══════════════════════════════════════════════════════════════════════════════
 
 NORMAL_MIN_INSTALLS = 10
@@ -372,10 +334,10 @@ HUNTER_MIN_INSTALLS = 50
 
 def _passes_normal(score_raw, ratings_count: int, installs: int) -> bool:
     """
-    Normal mode filter: strictly brand-new apps with NO rating and NO reviews.
-    All values are raw from Play Store — nothing is converted before this call.
+    Normal mode: strictly brand-new apps with NO rating and NO reviews.
+    Raw Play Store values — not converted before this call.
     """
-    # Any published rating means the app is no longer "new" for our purposes
+    # Any published rating → not "new" for our purposes
     if score_raw is not None:
         try:
             if float(score_raw) > 0:
@@ -383,11 +345,10 @@ def _passes_normal(score_raw, ratings_count: int, installs: int) -> bool:
         except (TypeError, ValueError):
             pass
 
-    # Any reviews at all → not truly new
+    # Any reviews → not truly new
     if int(ratings_count or 0) > 0:
         return False
 
-    # Install range check
     inst = int(installs or 0)
     if inst < NORMAL_MIN_INSTALLS or inst > NORMAL_MAX_INSTALLS:
         return False
@@ -397,9 +358,9 @@ def _passes_normal(score_raw, ratings_count: int, installs: int) -> bool:
 def _passes_hunter(score_raw, ratings_count: int, installs: int,
                    max_score: float, max_inst: int) -> bool:
     """
-    Hunter mode filter: struggling apps that have a real but LOW rating.
+    Hunter mode: struggling apps that have a real but LOW rating.
     Requires an actual positive score — unrated apps are excluded.
-    All values are raw from Play Store — nothing is converted before this call.
+    Raw Play Store values — not converted before this call.
     """
     if score_raw is None:
         return False
@@ -408,7 +369,7 @@ def _passes_hunter(score_raw, ratings_count: int, installs: int,
     except (TypeError, ValueError):
         return False
 
-    # Must have a real positive score (unrated apps → normal mode)
+    # Must have a real positive score (unrated → normal mode)
     if s <= 0:
         return False
 
@@ -416,11 +377,10 @@ def _passes_hunter(score_raw, ratings_count: int, installs: int,
     if int(ratings_count or 0) < 1:
         return False
 
-    # Score must be at or below the threshold (struggling app)
+    # Score must be at or below threshold (struggling app)
     if s > max_score:
         return False
 
-    # Install range
     inst = int(installs or 0)
     if inst < HUNTER_MIN_INSTALLS or inst > int(max_inst):
         return False
@@ -559,7 +519,7 @@ def _fallback_keywords(original: str, used: list) -> list:
     return candidates[:20]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Email templates
+# Email templates (Dual-mode: NEW APP vs OLD APP)
 # ══════════════════════════════════════════════════════════════════════════════
 
 DEFAULT_NEW_APP_SUBJECT = "Quick question about {{app_name}}"
@@ -592,6 +552,7 @@ Best regards,
 
 App: {{url}}"""
 
+# Legacy aliases
 DEFAULT_EMAIL_SUBJECT = DEFAULT_NEW_APP_SUBJECT
 DEFAULT_EMAIL_BODY    = DEFAULT_NEW_APP_BODY
 
@@ -605,7 +566,11 @@ def format_score(score) -> str:
         return ""
 
 def select_template(lead: dict, base_subject: str = "", base_body: str = "") -> tuple:
-    """Choose old-app or new-app template based on whether the lead has a rating."""
+    """
+    Choose old-app or new-app template based on whether the lead has a rating.
+    OLD APP  → has a real published score (rating > 0)
+    NEW APP  → no rating / score is 0 or None
+    """
     has_rating = bool(format_score(lead.get("score")))
     if has_rating:
         return (
@@ -639,9 +604,9 @@ def fill_template(tpl: str, lead: dict) -> str:
 def ai_gen_email(lead: dict, base_subject: str, base_body: str) -> tuple[str, str]:
     """
     Generate a personalized email using AI, keeping the template structure intact.
-    Falls back to plain template substitution if AI is unavailable or fails.
     Automatically selects the correct template (new-app vs old-app) based on
     whether the lead has a published rating.
+    Falls back to plain template substitution if AI is unavailable or fails.
     """
     key = get_cfg("GROQ_API_KEY")
     tpl_subject, tpl_body = select_template(lead, base_subject, base_body)
@@ -709,11 +674,7 @@ STRICT RULES:
 # Search combos
 #
 # NORMAL MODE — 12 countries to maximise discovery of newly published apps.
-#   New apps appear in their developer's home country first. Casting wide
-#   across diverse markets finds more apps than sticking to US/GB only.
-#
 # HUNTER MODE — 16 countries covering all major English-language app markets.
-#   More countries → more total rated apps in the pool → more struggling ones.
 # ══════════════════════════════════════════════════════════════════════════════
 
 NORMAL_SEARCH_COMBOS = [
@@ -743,47 +704,18 @@ def extract_email(text: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 # Core scraper
 #
-# ARCHITECTURE — mirrors the original main.py scraping flow exactly, but with:
-#
-#   1. Persistent Scraped Apps DB (sheet tab):
-#      Every app whose detail is fetched gets recorded with a status.
-#      On the next run, permanently-processed apps are skipped immediately,
-#      saving time and rate-limit budget for fresh apps.
-#
-#   2. Correct filter separation:
-#      Normal mode:  no score, no reviews, small installs.
-#      Hunter mode:  HAS a score > 0, score is low, small installs.
-#      These two modes do NOT overlap — unrated apps never pass hunter,
-#      rated apps never pass normal.
-#
-#   3. "no_email" apps are rechecked every run:
-#      Unlike filtered/qualified/no_detail apps which are skipped forever,
-#      apps that passed the filter but had no email are re-fetched each run.
-#      A developer may have added contact info since the last check.
-#
-#   4. Parallel detail fetching (ThreadPoolExecutor):
-#      Original code fetched details one by one, sequentially.
-#      We fetch DETAIL_WORKERS at a time, dramatically reducing runtime.
-#      Small per-request jitter (0.1–0.8s) prevents bursting the rate limit.
-#
-#   5. Dedup is purely based on qualified leads:
-#      is_duplicate() checks qualified_ids + qualified_emails only.
-#      It does NOT check the scraped DB — those are separate concerns.
-#
 # STEP-BY-STEP FLOW FOR EACH KEYWORD:
 #   Step 1: Search all country combos → collect unique app IDs into pool.
 #   Step 2: Remove IDs already permanently processed (is_already_scraped).
-#           "no_email" IDs pass through — they are eligible for recheck.
-#   Step 3: Fetch details in parallel for remaining IDs.
-#   Step 4: Apply mode filter (_passes_normal or _passes_hunter) using
-#           RAW values exactly as returned by Play Store.
+#           "no_email" IDs pass through — eligible for recheck.
+#   Step 3: Fetch details in parallel (ThreadPoolExecutor).
+#   Step 4: Apply mode filter (_passes_normal OR _passes_hunter) using RAW values.
 #   Step 5: Check keyword relevance (relaxed — any one token match).
 #   Step 6: Extract email from all available fields.
 #           If no email → record "no_email", do NOT add to skip cache.
 #   Step 7: Check is_duplicate (qualified leads only).
-#           If dup → record "qualified", add to skip cache, skip lead creation.
-#   Step 8: All checks passed → build lead, register_qualified, record "qualified".
-#   Step 9: After thread pool, batch-write all scrape records to sheet.
+#   Step 8: All checks passed → build lead, register_qualified.
+#   Step 9: Batch-write all scrape records to sheet after thread pool.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _fetch_one_detail(app_id: str) -> tuple[str, dict | None]:
@@ -792,10 +724,7 @@ def _fetch_one_detail(app_id: str) -> tuple[str, dict | None]:
     return app_id, safe_app_detail(app_id)
 
 def scrape_keyword(keyword: str, hunter: dict = None) -> list:
-    """
-    Full scrape pipeline for one keyword.
-    Returns a list of new qualified lead dicts.
-    """
+    """Full scrape pipeline for one keyword. Returns list of new qualified lead dicts."""
     push_log(f"🔍 Scraping: '{keyword}'")
 
     is_hunter      = bool(hunter and hunter.get("active"))
@@ -804,7 +733,7 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
     combos         = HUNTER_SEARCH_COMBOS if is_hunter else NORMAL_SEARCH_COMBOS
     keyword_tokens = build_keyword_tokens(keyword)
 
-    # ── STEP 1: Search all country combos — collect unique app IDs ────────────
+    # ── STEP 1: Search all country combos ────────────────────────────────────
     push_log(f"  Searching {len(combos)} countries...")
     seen_in_search: set = set()
     app_id_pool:   list = []
@@ -828,7 +757,6 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
         push_log(f"  [{country}] {len(results)} results, "
                  f"{new_ids} new IDs (pool: {len(app_id_pool)})")
 
-        # Brief pause between countries — polite to Play Store
         if stop_event.wait(random.uniform(0.5, 1.5)):
             break
 
@@ -840,7 +768,6 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
         return []
 
     # ── STEP 2: Remove permanently-processed IDs ──────────────────────────────
-    # "no_email" apps pass through here — they are eligible for recheck.
     pre_count = len(app_id_pool)
     to_fetch  = [aid for aid in app_id_pool if not is_already_scraped(aid)]
     skipped   = pre_count - len(to_fetch)
@@ -849,18 +776,11 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
     push_log(f"  Fetching details: {len(to_fetch)} apps "
              f"({DETAIL_WORKERS} parallel workers)...")
 
-    # ── Batch scrape records — collected during processing, written after ──────
-    # Writing to sheet inside the thread pool would cause concurrent HTTP calls
-    # to Apps Script which it does not handle well. Collect here, write later.
+    # Batch scrape records — collected during processing, written after
     scrape_records      = []
     scrape_records_lock = threading.Lock()
 
     def _record(aid, aname, status, installs=0, score=None, category=""):
-        """
-        Thread-safe collection of one scrape outcome.
-        Also immediately updates the in-memory skip cache so other threads
-        running in parallel can see this app as processed right away.
-        """
         with scrape_records_lock:
             scrape_records.append({
                 "app_id": aid, "app_name": aname, "status": status,
@@ -884,14 +804,11 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
 
             app_id, details = future.result()
 
-            # STEP 3 result: detail fetch failed
             if details is None:
                 _record(app_id, app_id, "no_detail")
                 continue
 
-            # ── Raw values exactly as Play Store returned them ────────────────
-            # IMPORTANT: Do NOT convert, zero, or modify score_raw before
-            # passing to filter functions. Both filters use the raw value.
+            # Raw values exactly as Play Store returned them — do NOT convert before filter
             installs      = int(details.get("minInstalls") or 0)
             ratings_count = int(details.get("ratings")     or 0)
             score_raw     = details.get("score")    # float | None | 0.0 — untouched
@@ -899,7 +816,7 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
             app_genre     = details.get("genre", "")
             app_desc      = details.get("description", "")
 
-            # STEP 4: Mode filter
+            # STEP 4: Mode filter — strict separation, no overlap
             if is_hunter:
                 passes_filter = _passes_hunter(
                     score_raw, ratings_count, installs, max_score, max_inst)
@@ -916,7 +833,7 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
                 _record(app_id, app_name, "filtered", installs, score_raw, app_genre)
                 continue
 
-            # STEP 6: Email extraction — try all available fields
+            # STEP 6: Email extraction
             email = (
                 extract_email(details.get("developerEmail", ""))
                 or extract_email(details.get("privacyPolicy", ""))
@@ -926,23 +843,20 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
             )
 
             if not email:
-                # Passed filter but no email found.
-                # Record as "no_email" — intentionally NOT a permanent skip.
-                # This app will be re-fetched next run in case an email appears.
+                # NOT a permanent skip — will recheck next run
                 _record(app_id, app_name, "no_email", installs, score_raw, app_genre)
                 score_str = f"{score_raw:.1f}★" if score_raw else "no-rating"
                 push_log(f"  ⚠ no_email (will recheck): {app_name} "
                          f"| {installs:,} inst | {score_str}")
                 continue
 
-            # STEP 7: Dedup — check qualified leads only (not scraped DB)
+            # STEP 7: Dedup — check qualified leads only
             if is_duplicate(app_id, email):
                 push_log(f"  ⟳ dup (already qualified): {app_name}")
-                # Record as "qualified" so we don't re-process in future runs
                 _record(app_id, app_name, "qualified", installs, score_raw, app_genre)
                 continue
 
-            # STEP 8: All checks passed — this is a new qualified lead
+            # STEP 8: All checks passed — new qualified lead
             register_qualified(app_id, email)
             _record(app_id, app_name, "qualified", installs, score_raw, app_genre)
 
@@ -953,7 +867,7 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
                 "email":         email,
                 "category":      app_genre,
                 "installs":      installs,
-                "score":         score_raw,   # raw Play Store value, no conversion
+                "score":         score_raw,   # raw Play Store value
                 "ratings_count": ratings_count,
                 "description":   (app_desc or "")[:300],
                 "url":           f"https://play.google.com/store/apps/details?id={app_id}",
@@ -972,9 +886,7 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
                      f"| {installs:,} inst | {score_str} "
                      f"| {ratings_count} rev | {email}")
 
-    # ── STEP 9: Batch-write all scrape records to sheet ───────────────────────
-    # Done sequentially after the thread pool so we never have concurrent
-    # writes to Apps Script. Each write is a single HTTP POST.
+    # ── STEP 9: Batch-write scrape records to sheet ───────────────────────────
     if scrape_records:
         push_log(f"  Writing {len(scrape_records)} records to Scraped Apps DB...")
         for rec in scrape_records:
@@ -990,7 +902,7 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
                 keyword  = rec["keyword"],
             )
 
-    # Summary log
+    # Summary
     q = sum(1 for r in scrape_records if r["status"] == "qualified")
     n = sum(1 for r in scrape_records if r["status"] == "no_email")
     f = sum(1 for r in scrape_records if r["status"] == "filtered")
@@ -1001,7 +913,7 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
     return leads
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Email send helpers
+# Email send helpers — multi-URL + quota tracking
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_email_urls() -> list:
@@ -1059,7 +971,6 @@ def send_email(lead: dict, subject: str, body: str) -> tuple[str, str]:
                 "body":    body,
             }, timeout=30, allow_redirects=True)
 
-            # HTML response means the script was deployed incorrectly
             if "html" in r.headers.get("Content-Type", "").lower():
                 push_log("  Email URL deployed incorrectly "
                          "(Deploy → Execute as: Me, Access: Anyone).")
@@ -1108,11 +1019,7 @@ def _cancel_cooldown_retry():
     cooldown_retry_thread = None
 
 def _schedule_email_retry(leads_to_send: list, base_subject: str, base_body: str):
-    """
-    Wait COOLDOWN_SECONDS then retry sending emails.
-    If still quota-exhausted, re-enter cooldown recursively.
-    Can be cancelled cleanly via _cancel_cooldown_retry().
-    """
+    """Wait COOLDOWN_SECONDS then retry sending emails."""
     global global_cooldown_until
     cooldown_retry_cancel.clear()
     with email_state_lock:
@@ -1284,14 +1191,12 @@ def run_automation(initial_kw: str, target: int, hunter: dict = None):
         all_leads.extend(batch)
         upd(leads_found=len(all_leads), leads=[l.copy() for l in all_leads])
 
-        # Write each new lead to sheet immediately
         for lead in batch:
             sheet_append_lead(lead)
             sheet_append_qualified(lead)
 
         push_log(f"📊 Progress: {len(all_leads)} / {target} leads")
 
-        # Short pause between keywords
         if not stop_event.is_set() and len(all_leads) < target:
             wait = random.uniform(4, 10)
             push_log(f"  Pausing {wait:.0f}s before next keyword...")
@@ -1567,10 +1472,7 @@ def api_scraped_stats():
 
 @application.route("/api/clear_scraped_db", methods=["POST"])
 def api_clear_scraped_db():
-    """
-    Clear the Scraped Apps DB tab from the sheet and reset in-memory skip cache.
-    Use when you want a completely fresh scrape that ignores all previous history.
-    """
+    """Clear Scraped Apps DB tab from sheet and reset in-memory skip cache."""
     with state_lock:
         if state["running"]:
             return jsonify({"error": "Cannot clear while running"}), 409
