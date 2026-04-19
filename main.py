@@ -22,7 +22,8 @@ state = {
 }
 
 # ── Global duplicate tracker — persists across runs until clear ───────────────
-global_seen_ids: set = set()
+# app_id এবং email lowercase — দুটোই এখানে track হয়
+global_seen_ids:    set = set()
 global_seen_emails: set = set()
 
 run_cfg = {}
@@ -87,35 +88,66 @@ def sheet_log_keyword(keyword: str, count: int):
 # ── Sheet-based duplicate loader ──────────────────────────────────────────────
 def load_sheet_duplicates():
     """
-    Run শুরুতে একবার call হয়।
-    Sheet এর 'All Leads' tab থেকে existing App ID + Email load করে
-    global_seen_ids / global_seen_emails এ add করে।
-    এতে আগের run এর leads আর duplicate হিসেবে scrape হবে না।
+    প্রতিটা automation run শুরুর আগে একবার call হয়।
+    Sheet এর 'All Leads' tab থেকে সব existing App ID + Email
+    global_seen_ids / global_seen_emails এ load করে।
+
+    এরপর scrape_keyword() এ কোনো নতুন app এই দুই set এর বিরুদ্ধে
+    check হয় — match হলে সেটা duplicate হিসেবে skip হয়।
+
+    IMPORTANT:
+      - App ID: exact match (case-sensitive, Play Store format)
+      - Email: lowercase করে store ও compare — case mismatch এ duplicate miss হতো
+      - Sheet এ App ID নেই এমন row email দিয়েও catch হবে
     """
     global global_seen_ids, global_seen_emails
     url = get_cfg("APPS_SCRIPT_WEB_URL")
     if not url:
-        push_log("  No sheet URL — skipping sheet duplicate load.")
+        push_log("  ⚠ No sheet URL configured — duplicate check is in-memory only.")
         return
-    push_log("  Loading existing leads from sheet for duplicate check...")
+
+    push_log("  📋 Loading sheet leads for duplicate prevention...")
     try:
-        r      = requests.post(url, json={"action": "get_all_leads"}, timeout=30)
-        result = r.json() if r.text else {}
+        r = requests.post(url, json={"action": "get_all_leads"}, timeout=35)
+        if not r.text:
+            push_log("  ⚠ Sheet returned empty response — skipping dedup load.")
+            return
+        result = r.json()
         leads  = result.get("leads", [])
+        if not leads:
+            push_log("  Sheet has 0 existing leads — starting fresh.")
+            return
+
         added_ids    = 0
         added_emails = 0
         for lead in leads:
-            aid = (lead.get("App ID") or lead.get("app_id") or "").strip()
-            em  = (lead.get("Email")  or lead.get("email")  or "").strip().lower()
+            # App ID — try both key formats (sheet returns app_id or App ID)
+            aid = (
+                lead.get("app_id") or
+                lead.get("App ID") or ""
+            ).strip()
+
+            # Email — always lowercase for consistent comparison
+            em = (
+                lead.get("email") or
+                lead.get("Email") or ""
+            ).strip().lower()
+
             if aid and aid not in global_seen_ids:
                 global_seen_ids.add(aid)
                 added_ids += 1
+
             if em and em not in global_seen_emails:
                 global_seen_emails.add(em)
                 added_emails += 1
-        push_log(f"  Sheet dedup loaded: {added_ids} app IDs, {added_emails} emails.")
+
+        push_log(
+            f"  ✅ Sheet dedup loaded: {added_ids} app IDs + "
+            f"{added_emails} emails blocked from re-scraping."
+        )
+
     except Exception as e:
-        push_log(f"  Sheet dedup load failed: {e} — continuing with in-memory only.")
+        push_log(f"  ❌ Sheet dedup load failed: {e} — in-memory dedup only.")
 
 # ── AI keyword generation ─────────────────────────────────────────────────────
 def ai_gen_keywords(original: str, used: list) -> list:
@@ -310,24 +342,77 @@ def extract_email(text):
     m = EMAIL_RE.search(str(text))
     return m.group(0) if m else ""
 
-def passes_filter(installs: int, score, hunter: dict) -> bool:
-    if hunter and hunter.get("active"):
-        max_inst  = int(hunter.get("max_installs") or 5000)
-        max_score = float(hunter.get("max_score") or 2.5)
-        if installs > max_inst:
+def passes_filter(installs: int, score, ratings_count: int, hunter: dict) -> bool:
+    """
+    ─────────────────────────────────────────────────────────────
+    NORMAL MODE  (hunter inactive)
+      Target: Brand-new apps with ZERO rating and ZERO reviews.
+      ✅ score must be None OR exactly 0  (no published rating)
+      ✅ ratings_count must be 0          (no reviews at all)
+      ✅ installs: 500 – 5,000
+      ❌ Any published rating → reject
+      ❌ Any review → reject (confirms app is not brand-new)
+
+    HUNTER MODE  (hunter active)
+      Target: Struggling apps with a LOW published rating.
+      ✅ score must be > 0                (has a real published rating)
+      ✅ score ≤ max_score                (rating is low)
+      ✅ ratings_count ≥ 1               (confirms rating is real)
+      ✅ installs: 50 – max_installs
+      ❌ No rating → reject (those go to normal mode)
+    ─────────────────────────────────────────────────────────────
+    The two modes never overlap:
+      Unrated apps  → normal mode only
+      Rated apps    → hunter mode only
+    """
+    is_hunter = bool(hunter and hunter.get("active"))
+
+    if is_hunter:
+        # ── HUNTER: must have a real, low rating ──────────────────────────────
+        if score is None:
+            return False                        # no rating → normal mode territory
+        try:
+            s = float(score)
+        except (TypeError, ValueError):
             return False
-        if score is not None and score > max_score:
+        if s <= 0:
+            return False                        # treat 0 as unrated
+        if int(ratings_count or 0) < 1:
+            return False                        # rating with 0 reviews is bogus
+
+        max_inst  = int(hunter.get("max_installs") or 5000)
+        max_score = float(hunter.get("max_score")  or 2.5)
+        if s > max_score:
+            return False                        # rating too high — not struggling
+        inst = int(installs or 0)
+        if inst < 50 or inst > max_inst:
             return False
         return True
-    # Normal mode: <=10 000 installs, rating absent OR <=3.5
-    if installs > 10_000:
-        return False
-    if score is not None and score > 3.5:
-        return False
-    return True
+
+    else:
+        # ── NORMAL: must have NO rating and NO reviews ─────────────────────────
+        if score is not None:
+            try:
+                if float(score) > 0:
+                    return False                # has a real rating → hunter mode
+            except (TypeError, ValueError):
+                pass
+        if int(ratings_count or 0) > 0:
+            return False                        # has reviews → not brand-new
+        inst = int(installs or 0)
+        if inst < 500 or inst > 5_000:
+            return False
+        return True
 
 def scrape_keyword(keyword: str, hunter: dict = None) -> list:
-    """Scrape across multiple country combos; deduplicate globally."""
+    """
+    একটা keyword এ সব SEARCH_COMBOS country তে search করে leads collect করে।
+
+    Duplicate prevention (3 layer):
+      1. global_seen_ids   — এই run + sheet এর সব existing app IDs
+      2. global_seen_emails — এই run + sheet এর সব existing emails (lowercase)
+      3. passes_filter()   — mode-specific install/rating/review filter
+    """
     global global_seen_ids, global_seen_emails
     push_log(f"🔍 Scraping: '{keyword}'")
     leads = []
@@ -344,37 +429,59 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
         for item in results:
             if stop_event.is_set():
                 break
-            app_id = item.get("appId", "")
-            if not app_id or app_id in global_seen_ids:
+
+            app_id = (item.get("appId") or "").strip()
+            if not app_id:
                 continue
+
+            # ── Layer 1: App ID duplicate check (before fetching detail) ──────
+            if app_id in global_seen_ids:
+                continue
+
+            # ── Fetch full detail ─────────────────────────────────────────────
             try:
                 details = gp_app(app_id, lang="en", country="us")
             except Exception:
+                # Can't fetch → mark seen so we don't retry this run
                 global_seen_ids.add(app_id)
                 continue
 
-            installs = details.get("minInstalls") or 0
-            score    = details.get("score")
+            installs      = int(details.get("minInstalls") or 0)
+            score         = details.get("score")           # float | None
+            ratings_count = int(details.get("ratings") or 0)
 
-            if not passes_filter(installs, score, hunter):
+            # ── Layer 2: Mode filter (normal vs hunter) ───────────────────────
+            if not passes_filter(installs, score, ratings_count, hunter):
+                # Mark seen so same app isn't rechecked in this run
                 global_seen_ids.add(app_id)
                 continue
 
+            # ── Email extraction ──────────────────────────────────────────────
             email = (
                 extract_email(details.get("developerEmail", ""))
                 or extract_email(details.get("privacyPolicy", ""))
                 or extract_email(details.get("description", ""))
                 or extract_email(details.get("recentChanges", ""))
             )
-            email_lower = email.lower() if email else ""
-            if not email or email_lower in global_seen_emails:
+            if not email:
                 global_seen_ids.add(app_id)
                 continue
+
+            email_lc = email.strip().lower()
+
+            # ── Layer 3: Email duplicate check ────────────────────────────────
+            if email_lc in global_seen_emails:
+                global_seen_ids.add(app_id)
+                continue
+
+            # ── All checks passed → qualified lead ────────────────────────────
+            global_seen_ids.add(app_id)
+            global_seen_emails.add(email_lc)
 
             lead = {
                 "app_id":      app_id,
                 "app_name":    details.get("title", ""),
-                "developer":   details.get("developer", ""),
+                "developer":   (details.get("developer") or "").strip(),
                 "email":       email,
                 "category":    details.get("genre", ""),
                 "installs":    installs,
@@ -387,10 +494,14 @@ def scrape_keyword(keyword: str, hunter: dict = None) -> list:
                 "email_sent":  False,
             }
             leads.append(lead)
-            global_seen_ids.add(app_id)
-            global_seen_emails.add(email_lower)
-            score_str = f"{score:.1f}★" if score else "new"
-            push_log(f"  ✅ {lead['app_name']} | {installs:,} installs | {score_str} | {email}")
+
+            mode_tag  = "HUNTER" if (hunter and hunter.get("active")) else "NORMAL"
+            score_str = f"{score:.1f}★" if score else "no-rating"
+            push_log(
+                f"  ✅ [{mode_tag}] {lead['app_name']} "
+                f"| {installs:,} inst | {score_str} "
+                f"| {ratings_count} reviews | {email}"
+            )
             time.sleep(0.25)
 
         push_log(f"  [{country}] done. Leads so far: {len(leads)}")
