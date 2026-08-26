@@ -1,0 +1,1654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>PlayLead Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+:root {
+  --bg:       #05060a;
+  --bg2:      #0a0c14;
+  --card:     #0e1018;
+  --card2:    #12141e;
+  --surface:  #161824;
+  --border:   #1c1e2e;
+  --border2:  #252840;
+  --accent:   #6c5ce7;
+  --accent2:  #a29bfe;
+  --accent3:  #ddd6fe;
+  --cyan:     #22d3ee;
+  --cyan2:    #67e8f9;
+  --green:    #34d399;
+  --green2:   #6ee7b7;
+  --red:      #f87171;
+  --amber:    #fbbf24;
+  --amber2:   #fde68a;
+  --blue:     #60a5fa;
+  --pink:     #f472b6;
+  --text:     #e8eaf0;
+  --text2:    #9ca3b8;
+  --text3:    #5b6078;
+  --mono:     'JetBrains Mono', monospace;
+  --sans:     'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --r:        10px;
+  --r2:       14px;
+  --r3:       20px;
+  --shadow:   0 4px 24px rgba(0,0,0,.4);
+  --glow:     0 0 30px rgba(108,92,231,.15);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+
+/* ── SCROLLBAR ── */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:var(--text3)}
+
+/* ── MOBILE HEADER ── */
+.mobile-header{display:none;position:fixed;top:0;left:0;right:0;height:56px;background:rgba(10,12,20,.92);backdrop-filter:blur(20px);border-bottom:1px solid var(--border);z-index:200;padding:0 16px;align-items:center;justify-content:space-between}
+.mobile-logo{font-weight:800;font-size:17px;letter-spacing:-.3px;color:var(--text)}
+.mobile-logo span{color:var(--accent)}
+.hamburger{width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:8px;background:var(--card);border:1px solid var(--border);cursor:pointer;color:var(--text);font-size:18px;transition:all .2s}
+.hamburger:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ── SIDEBAR ── */
+.sidebar{position:fixed;left:0;top:0;bottom:0;width:240px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;z-index:100;transition:transform .3s cubic-bezier(.4,0,.2,1)}
+.sidebar-logo{padding:28px 24px 24px;border-bottom:1px solid var(--border)}
+.logo-mark{font-size:24px;font-weight:800;letter-spacing:-.5px;color:var(--text);line-height:1}
+.logo-mark span{color:var(--accent)}
+.logo-sub{font-size:9px;color:var(--text3);letter-spacing:3px;text-transform:uppercase;margin-top:6px;font-family:var(--mono);font-weight:500}
+.nav{padding:20px 14px;flex:1}
+.nav-item{display:flex;align-items:center;gap:11px;padding:11px 16px;border-radius:var(--r);cursor:pointer;font-size:13px;font-weight:500;color:var(--text3);transition:all .15s;margin-bottom:3px;letter-spacing:.1px}
+.nav-item:hover{background:var(--card);color:var(--text2)}
+.nav-item.active{background:linear-gradient(135deg,rgba(108,92,231,.12),rgba(108,92,231,.04));color:var(--accent2);border:1px solid rgba(108,92,231,.2)}
+.nav-item .icon{font-size:15px;width:20px;text-align:center}
+.nav-sep{height:1px;background:var(--border);margin:12px 8px}
+
+.sidebar-send-pending{padding:12px 14px;border-top:1px solid var(--border)}
+.btn-send-pending{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 16px;border-radius:var(--r);background:linear-gradient(135deg,rgba(108,92,231,.08),rgba(108,92,231,.02));border:1px solid rgba(108,92,231,.15);cursor:pointer;font-family:var(--sans);font-size:12px;font-weight:600;color:var(--accent2);transition:all .2s;letter-spacing:.2px}
+.btn-send-pending:hover{background:linear-gradient(135deg,rgba(108,92,231,.15),rgba(108,92,231,.06));border-color:var(--accent)}
+.btn-send-pending:disabled{opacity:.35;cursor:not-allowed}
+.pending-badge{background:var(--accent);color:#fff;font-size:10px;font-weight:700;font-family:var(--mono);padding:2px 8px;border-radius:10px;min-width:22px;text-align:center}
+.pending-badge.zero{background:var(--text3);color:var(--bg)}
+
+.sidebar-bottom{padding:14px;border-top:1px solid var(--border)}
+.status-pill{display:flex;align-items:center;gap:9px;padding:10px 14px;background:var(--card);border-radius:var(--r);font-size:11px;color:var(--text2);border:1px solid var(--border)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--text3);flex-shrink:0;transition:all .3s}
+.dot.live{background:var(--green);box-shadow:0 0 10px var(--green);animation:pulse 2s ease-in-out infinite}
+.dot.done-dot{background:var(--green)}
+.dot.err{background:var(--red)}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.85)}}
+
+/* ── MAIN ── */
+.main{margin-left:240px;min-height:100vh;padding:32px 36px}
+.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:32px;gap:12px;flex-wrap:wrap}
+.page-title{font-size:26px;font-weight:700;letter-spacing:-.3px;color:var(--text)}
+.page-title .hi{background:linear-gradient(135deg,var(--accent),var(--cyan));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.topbar-right{display:flex;align-items:center;gap:8px}
+.time-badge{font-family:var(--mono);font-size:11px;color:var(--text3);background:var(--card);padding:7px 14px;border-radius:var(--r);border:1px solid var(--border)}
+
+.ping-badge{font-family:var(--mono);font-size:10px;padding:6px 12px;border-radius:var(--r);border:1px solid var(--border);background:var(--card);display:flex;align-items:center;gap:6px;color:var(--text3);white-space:nowrap;transition:all .3s}
+.ping-badge.ok{border-color:rgba(34,211,238,.25);background:rgba(34,211,238,.06);color:var(--cyan)}
+.ping-badge.off{border-color:rgba(248,113,113,.2);background:rgba(248,113,113,.06);color:var(--red)}
+
+/* ── SECTIONS ── */
+.section{display:none;animation:fadeUp .3s ease}
+.section.active{display:block}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+/* ── CARD ── */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:24px;position:relative;overflow:hidden;transition:border-color .2s}
+.card:hover{border-color:var(--border2)}
+.card-head{font-size:9px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:var(--text3);margin-bottom:20px;display:flex;align-items:center;gap:10px}
+.card-head::after{content:'';flex:1;height:1px;background:var(--border)}
+
+/* ── STATS GRID ── */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:24px}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:22px 24px;position:relative;overflow:hidden;transition:all .2s}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;opacity:.6}
+.stat-card:hover{border-color:var(--border2);transform:translateY(-1px)}
+.stat-card.c-accent::before{background:linear-gradient(90deg,var(--accent),var(--cyan))}
+.stat-card.c-green::before{background:linear-gradient(90deg,#059669,var(--green))}
+.stat-card.c-blue::before{background:linear-gradient(90deg,#2563eb,var(--blue))}
+.stat-card.c-amber::before{background:linear-gradient(90deg,#d97706,var(--amber))}
+.stat-card.c-cyan::before{background:linear-gradient(90deg,#0891b2,var(--cyan))}
+.stat-card.c-red::before{background:linear-gradient(90deg,#dc2626,var(--red))}
+.stat-card.c-pink::before{background:linear-gradient(90deg,#db2777,var(--pink))}
+.stat-label{font-size:9px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--text3);margin-bottom:12px}
+.stat-val{font-size:36px;font-weight:800;letter-spacing:-1.5px;line-height:1}
+.stat-sub{font-size:10px;color:var(--text3);margin-top:8px;font-family:var(--mono)}
+.c-accent .stat-val{color:var(--accent2)}
+.c-green .stat-val{color:var(--green)}
+.c-blue .stat-val{color:var(--blue)}
+.c-amber .stat-val{color:var(--amber)}
+.c-cyan .stat-val{color:var(--cyan)}
+.c-red .stat-val{color:var(--red)}
+.c-pink .stat-val{color:var(--pink)}
+
+/* ── GRID ── */
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+
+/* ── PROGRESS ── */
+.prog-row{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.prog-lbl{font-size:11px;color:var(--text2);min-width:130px}
+.prog-track{flex:1;height:5px;background:var(--surface);border-radius:99px;overflow:hidden}
+.prog-fill{height:100%;border-radius:99px;transition:width .8s cubic-bezier(.4,0,.2,1)}
+.pf-accent{background:linear-gradient(90deg,var(--accent),var(--accent2))}
+.pf-green{background:linear-gradient(90deg,#059669,var(--green))}
+.pf-blue{background:linear-gradient(90deg,#2563eb,var(--blue))}
+.pf-amber{background:linear-gradient(90deg,#d97706,var(--amber))}
+.pf-cyan{background:linear-gradient(90deg,#0891b2,var(--cyan))}
+.prog-pct{font-family:var(--mono);font-size:10px;color:var(--text3);min-width:36px;text-align:right}
+
+/* ── PIPELINE ── */
+.pipeline{display:flex;background:var(--card);border:1px solid var(--border);border-radius:var(--r2);overflow:hidden;margin-bottom:24px}
+.pipe-step{flex:1;padding:16px 8px;text-align:center;font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text3);border-right:1px solid var(--border);transition:all .3s;position:relative}
+.pipe-step:last-child{border-right:none}
+.pipe-ico{font-size:18px;display:block;margin-bottom:6px}
+.pipe-step.p-active{background:rgba(108,92,231,.08);color:var(--accent2)}
+.pipe-step.p-active::after{content:'';position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--accent)}
+.pipe-step.p-done{background:rgba(52,211,153,.06);color:var(--green)}
+.pipe-step.p-err{background:rgba(248,113,113,.06);color:var(--red)}
+
+/* ── ACTIVITY FEED ── */
+.act-feed{max-height:320px;overflow-y:auto}
+.act-item{display:flex;gap:10px;padding:7px 10px;border-radius:6px;font-size:11.5px;line-height:1.5;transition:background .15s}
+.act-item:hover{background:var(--surface)}
+.act-time{font-family:var(--mono);color:var(--text3);flex-shrink:0;font-size:10px;padding-top:2px}
+.act-msg{color:var(--text2);flex:1}
+
+/* ── KW CHIPS ── */
+.kw-chips{display:flex;flex-wrap:wrap;gap:6px;padding:2px 0}
+.kw-chip{display:flex;align-items:center;gap:5px;background:rgba(108,92,231,.08);border:1px solid rgba(108,92,231,.15);border-radius:6px;padding:4px 12px;font-size:10px;color:var(--accent2)}
+.kw-idx{font-family:var(--mono);color:var(--text3);font-size:9px}
+
+/* ── RUNNER CARD ── */
+.runner-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:24px;margin-bottom:20px}
+.runner-row{display:flex;gap:12px;align-items:stretch;flex-wrap:wrap}
+.kw-input{flex:1;min-width:220px;background:var(--bg2);border:1px solid var(--border);color:var(--text);font-family:var(--sans);font-size:14px;font-weight:400;padding:14px 20px;border-radius:var(--r);outline:none;transition:border .2s,box-shadow .2s}
+.kw-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(108,92,231,.1)}
+.kw-input::placeholder{color:var(--text3)}
+
+/* ── HUNTER MODE ── */
+.hunter-toggle{display:flex;align-items:center;gap:10px;padding:12px 18px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);cursor:pointer;font-size:12px;color:var(--text3);transition:all .15s;user-select:none;white-space:nowrap}
+.hunter-toggle:hover{border-color:var(--accent);color:var(--accent2)}
+.hunter-toggle.active{background:rgba(108,92,231,.08);border-color:rgba(108,92,231,.3);color:var(--accent2)}
+.hunter-fields{display:none;margin-top:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:16px;grid-template-columns:1fr 1fr;gap:14px}
+.hunter-fields.show{display:grid}
+.hf-label{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);margin-bottom:7px;font-weight:600}
+.hf-input{background:var(--bg);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:9px 14px;border-radius:7px;outline:none;width:100%;transition:border .2s}
+.hf-input:focus{border-color:var(--accent)}
+
+/* ── BUTTONS ── */
+.btn-primary{background:linear-gradient(135deg,var(--accent),#5b4cd4);color:#fff;border:none;padding:13px 30px;border-radius:var(--r);font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;letter-spacing:.3px;transition:all .2s;white-space:nowrap;box-shadow:0 2px 12px rgba(108,92,231,.3)}
+.btn-primary:hover{filter:brightness(1.1);transform:translateY(-1px);box-shadow:0 4px 20px rgba(108,92,231,.4)}
+.btn-primary:active{transform:translateY(0)}
+.btn-primary:disabled{opacity:.35;cursor:not-allowed;transform:none;filter:none;box-shadow:none}
+.btn-danger{background:transparent;color:var(--red);border:1px solid rgba(248,113,113,.3);padding:13px 24px;border-radius:var(--r);font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;display:none;white-space:nowrap}
+.btn-danger.show{display:inline-flex}
+.btn-danger:hover{background:rgba(248,113,113,.1);border-color:var(--red)}
+.btn-ghost{background:var(--surface);border:1px solid var(--border);color:var(--text2);padding:9px 18px;border-radius:var(--r);font-size:11px;cursor:pointer;font-family:var(--mono);transition:all .15s;white-space:nowrap}
+.btn-ghost:hover{color:var(--text);border-color:var(--border2)}
+.btn-gold{background:transparent;color:var(--amber);border:1px solid rgba(251,191,36,.3);padding:11px 24px;border-radius:var(--r);font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;white-space:nowrap}
+.btn-gold:hover{background:rgba(251,191,36,.1);border-color:var(--amber)}
+.btn-gold:disabled{opacity:.3;cursor:not-allowed}
+.btn-clear{background:transparent;color:var(--red);border:1px solid rgba(248,113,113,.15);padding:8px 18px;border-radius:var(--r);font-size:11px;cursor:pointer;font-family:var(--mono);transition:all .15s;white-space:nowrap}
+.btn-clear:hover{background:rgba(248,113,113,.06);border-color:rgba(248,113,113,.4)}
+
+/* ── TABLE ── */
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+thead th{padding:12px 16px;text-align:left;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);background:var(--bg2);border-bottom:1px solid var(--border);white-space:nowrap}
+tbody td{padding:12px 16px;border-bottom:1px solid rgba(28,30,46,.6);vertical-align:middle;white-space:nowrap}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:rgba(22,24,36,.5)}
+.bdg{display:inline-flex;align-items:center;gap:4px;font-size:9px;font-weight:700;letter-spacing:.5px;padding:4px 10px;border-radius:6px}
+.bdg-sent{background:rgba(52,211,153,.1);color:var(--green);border:1px solid rgba(52,211,153,.2)}
+.bdg-pend{background:rgba(251,191,36,.08);color:var(--amber);border:1px solid rgba(251,191,36,.15)}
+.bdg-cat{background:rgba(96,165,250,.08);color:var(--blue);border:1px solid rgba(96,165,250,.15)}
+.email-a{color:var(--accent2);text-decoration:none;font-family:var(--mono);font-size:10.5px;transition:color .15s}
+.email-a:hover{color:var(--cyan)}
+.ext-a{color:var(--text3);font-size:14px;text-decoration:none;transition:color .15s}
+.ext-a:hover{color:var(--accent2)}
+
+/* ── FUNNEL ── */
+.funnel{display:flex;flex-direction:column;gap:12px;padding:4px 0}
+.fn-step{display:flex;align-items:center;gap:14px}
+.fn-lbl{font-size:10px;color:var(--text2);min-width:100px;text-align:right}
+.fn-bar-wrap{flex:1;height:32px;background:var(--bg2);border-radius:7px;overflow:hidden}
+.fn-bar{height:100%;border-radius:7px;display:flex;align-items:center;padding:0 12px;font-size:11px;font-weight:700;color:#fff;transition:width .8s cubic-bezier(.4,0,.2,1);min-width:32px}
+.fn-cnt{font-family:var(--mono);font-size:11px;color:var(--text3);min-width:36px}
+
+/* ── SETUP FORMS ── */
+.setup-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.form-group{display:flex;flex-direction:column;gap:7px;margin-bottom:14px}
+.form-label{font-size:9px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--text3)}
+.form-hint{font-size:10.5px;color:var(--text3);line-height:1.7}
+.form-input{background:var(--bg2);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:12px 16px;border-radius:var(--r);outline:none;transition:border .2s,box-shadow .2s;width:100%}
+.form-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(108,92,231,.08)}
+.form-input::placeholder{color:var(--text3)}
+textarea.form-input{resize:vertical;line-height:1.7;font-size:11.5px}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.pass-wrap{position:relative}
+.pass-wrap .form-input{padding-right:44px}
+.pass-toggle{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text3);cursor:pointer;font-size:13px;padding:4px;transition:color .15s}
+.pass-toggle:hover{color:var(--text2)}
+
+/* ── KEEP ALIVE ── */
+.keepalive-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:24px;margin-bottom:14px}
+.ka-row{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+.ka-status{font-family:var(--mono);font-size:11px;margin-top:14px;padding:12px 16px;border-radius:var(--r);border:1px solid var(--border);color:var(--text3);background:var(--bg2);line-height:1.9;transition:all .3s}
+.ka-status.active{border-color:rgba(52,211,153,.25);background:rgba(52,211,153,.05);color:var(--green)}
+.ka-status.off{border-color:rgba(248,113,113,.2);background:rgba(248,113,113,.05);color:var(--red)}
+
+/* ── AS BOX ── */
+.as-box{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:18px;margin-top:10px}
+.as-box h4{font-size:10px;font-weight:700;color:var(--accent2);margin-bottom:12px;letter-spacing:.5px;text-transform:uppercase}
+.code-block{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px;font-family:var(--mono);font-size:10.5px;color:var(--blue);line-height:1.8;overflow-x:auto;white-space:pre}
+.env-block{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px;font-family:var(--mono);font-size:11px;color:var(--green);line-height:2.2;white-space:pre}
+.saved-msg{display:none;font-size:11px;color:var(--green);align-items:center;gap:6px}
+.saved-msg.show{display:flex}
+
+/* ── SPAM TEST ── */
+.spam-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:26px;margin-bottom:20px}
+.spam-result{margin-top:16px;padding:14px 18px;border-radius:var(--r);font-size:12px;font-family:var(--mono);display:none;line-height:1.7}
+.spam-result.ok{background:rgba(52,211,153,.06);border:1px solid rgba(52,211,153,.2);color:var(--green);display:block}
+.spam-result.err{background:rgba(248,113,113,.06);border:1px solid rgba(248,113,113,.2);color:var(--red);display:block}
+
+/* ── WARN ── */
+.cfg-warn{background:rgba(251,191,36,.05);border:1px solid rgba(251,191,36,.15);border-radius:var(--r);padding:13px 18px;font-size:12px;color:var(--amber);margin-bottom:24px;display:none;align-items:center;gap:10px;transition:all .3s}
+.cfg-warn.show{display:flex}
+
+/* ── EMPTY ── */
+.empty-st{text-align:center;padding:48px 24px;color:var(--text3);font-size:12px;line-height:2.2}
+.empty-ico{font-size:28px;display:block;margin-bottom:10px;opacity:.5}
+
+/* ── SHEET LINK ── */
+.sheet-link-btn{display:inline-flex;align-items:center;gap:6px;background:rgba(108,92,231,.08);border:1px solid rgba(108,92,231,.15);color:var(--accent2);padding:8px 16px;border-radius:7px;font-size:11px;font-weight:600;text-decoration:none;transition:all .15s}
+.sheet-link-btn:hover{background:rgba(108,92,231,.15);border-color:rgba(108,92,231,.3)}
+
+/* ── MODAL ── */
+.modal-overlay{display:none;position:fixed;inset:0;z-index:999;background:rgba(5,6,10,.85);backdrop-filter:blur(8px);align-items:center;justify-content:center}
+.modal-box{background:var(--card);border:1px solid var(--border);border-radius:var(--r3);max-width:720px;width:92%;max-height:85vh;overflow-y:auto;padding:28px;box-shadow:var(--shadow)}
+.modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+.modal-title{font-size:18px;font-weight:700;color:var(--text)}
+.modal-close{background:none;border:none;color:var(--text3);font-size:20px;cursor:pointer;padding:6px;border-radius:6px;transition:all .15s}
+.modal-close:hover{color:var(--text);background:var(--surface)}
+
+/* ── RESPONSIVE ── */
+@media(max-width:1024px){
+  .grid-2,.grid-3,.setup-grid,.form-row{grid-template-columns:1fr}
+  .stats-grid{grid-template-columns:repeat(2,1fr)}
+  .pipeline{flex-wrap:wrap}
+  .pipe-step{min-width:calc(33% - 1px);flex:none}
+}
+@media(max-width:768px){
+  .mobile-header{display:flex}
+  .sidebar{transform:translateX(-100%)}
+  .sidebar.open{transform:translateX(0);box-shadow:20px 0 60px rgba(0,0,0,.6)}
+  .main{margin-left:0;padding:72px 16px 24px}
+  .topbar{flex-direction:column;align-items:flex-start}
+  .stats-grid{grid-template-columns:1fr 1fr}
+  .runner-row{flex-direction:column}
+  .kw-input{min-width:0}
+  .hunter-fields.show{grid-template-columns:1fr}
+  .pipeline{flex-direction:column}
+  .pipe-step{border-right:none;border-bottom:1px solid var(--border);min-width:0}
+  .pipe-step:last-child{border-bottom:none}
+  .fn-step{flex-direction:column;gap:6px;align-items:stretch}
+  .fn-lbl{text-align:left;min-width:0}
+  .form-row{grid-template-columns:1fr}
+  .topbar-right{width:100%;justify-content:flex-start}
+  .ka-row{flex-direction:column}
+  .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99}
+  .sidebar-overlay.open{display:block}
+}
+@media(max-width:480px){
+  .stats-grid{grid-template-columns:1fr}
+  .stat-card{padding:18px}
+  .stat-val{font-size:28px}
+}
+</style>
+</head>
+<body>
+
+<!-- Mobile Header -->
+<div class="mobile-header">
+  <div class="mobile-logo">Play<span>Lead</span></div>
+  <div class="hamburger" onclick="toggleSidebar()">&#9776;</div>
+</div>
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+<!-- Sidebar -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-mark">Play<span>Lead</span></div>
+    <div class="logo-sub">Automation Engine</div>
+  </div>
+  <nav class="nav">
+    <div class="nav-item active" onclick="showSec('automation',this)"><span class="icon">&#9889;</span>Automation</div>
+    <div class="nav-item" onclick="showSec('analytics',this)"><span class="icon">&#128202;</span>Analytics</div>
+    <div class="nav-item" onclick="showSec('database',this)"><span class="icon">&#128451;</span>Database</div>
+    <div class="nav-item" onclick="showSec('spamtest',this)"><span class="icon">&#129514;</span>Spam Test</div>
+    <div class="nav-sep"></div>
+    <div class="nav-item" onclick="showSec('setup',this)"><span class="icon">&#9881;</span>Setup &amp; Config</div>
+  </nav>
+  <div class="sidebar-send-pending">
+    <button class="btn-send-pending" id="btnSendPending" onclick="sendPending()" title="Send emails to all unsent leads">
+      <span>&#128232; Send Pending</span>
+      <span class="pending-badge zero" id="pendingBadge">0</span>
+    </button>
+  </div>
+  <div class="sidebar-bottom">
+    <div class="status-pill">
+      <div class="dot" id="sbDot"></div>
+      <span id="sbStatus" style="color:var(--text3);">Idle</span>
+    </div>
+  </div>
+</aside>
+
+<!-- Main Content -->
+<main class="main">
+  <div class="topbar">
+    <div class="page-title" id="pgTitle">&#9889; <span class="hi">Automation</span></div>
+    <div class="topbar-right">
+      <div class="ping-badge" id="pingBadge" title="Keep-Alive status">&#9889; Keep-Alive: OFF</div>
+      <div class="time-badge" id="clk">--:--:--</div>
+    </div>
+  </div>
+  <div class="cfg-warn" id="cfgWarn">&#9888; &nbsp;Setup incomplete &mdash; go to <strong>Setup &amp; Config</strong> first.</div>
+
+  <!-- ═══ AUTOMATION ═══ -->
+  <section class="section active" id="sec-automation">
+    <div class="runner-card">
+      <div class="card-head">
+        Launch Automation
+        <span style="margin-left:auto;">
+          <button class="btn-clear" id="btnClear" onclick="clearHistory()" style="font-size:10px;padding:6px 14px;">&#128465; Clear All History</button>
+        </span>
+      </div>
+      <div class="runner-row">
+        <input class="kw-input" id="kwInput" type="text" placeholder="Keyword — e.g. budget tracker, meditation app ..." autocomplete="off"/>
+        <div class="hunter-toggle" id="hunterToggle" onclick="toggleHunter()" title="Hunter Mode: target low-rating apps">
+          &#127919; Hunter
+        </div>
+        <button class="btn-primary" id="btnStart" onclick="startAuto()">&#9654; Start</button>
+        <button class="btn-danger" id="btnStop" onclick="stopAuto()">&#9209; Stop</button>
+      </div>
+      <div class="hunter-fields" id="hunterFields">
+        <div>
+          <div class="hf-label">Max Installs</div>
+          <input class="hf-input" id="hf-installs" type="number" placeholder="5000" value="5000"/>
+        </div>
+        <div>
+          <div class="hf-label">Max Rating</div>
+          <input class="hf-input" id="hf-score" type="number" step="0.1" placeholder="2.5" value="2.5"/>
+        </div>
+      </div>
+    </div>
+
+    <div class="pipeline">
+      <div class="pipe-step" id="pp-scrape"><span class="pipe-ico">&#128269;</span>Scraping</div>
+      <div class="pipe-step" id="pp-ai"><span class="pipe-ico">&#129302;</span>AI Keywords</div>
+      <div class="pipe-step" id="pp-leads"><span class="pipe-ico">&#128203;</span>Leads Ready</div>
+      <div class="pipe-step" id="pp-email"><span class="pipe-ico">&#128231;</span>AI Email</div>
+      <div class="pipe-step" id="pp-done"><span class="pipe-ico">&#9989;</span>Complete</div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card c-accent"><div class="stat-label">Leads Found</div><div class="stat-val" id="stLeads">0</div><div class="stat-sub">Target: <span id="tgtNum">300</span></div></div>
+      <div class="stat-card c-green"><div class="stat-label">Emails Sent</div><div class="stat-val" id="stEmails">0</div><div class="stat-sub">of <span id="tgtLeadsForEmail">0</span> leads</div></div>
+      <div class="stat-card c-blue"><div class="stat-label">Keywords Used</div><div class="stat-val" id="stKws">0</div><div class="stat-sub">incl. AI-generated</div></div>
+      <div class="stat-card c-amber"><div class="stat-label">Delivery Rate</div><div class="stat-val" id="stRate">&mdash;</div><div class="stat-sub">email success %</div></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head">Progress</div>
+        <div class="prog-row"><div class="prog-lbl">Lead collection</div><div class="prog-track"><div class="prog-fill pf-accent" id="pfLeads" style="width:0%"></div></div><div class="prog-pct" id="ppLeads">0%</div></div>
+        <div class="prog-row"><div class="prog-lbl">Email outreach</div><div class="prog-track"><div class="prog-fill pf-green" id="pfEmail" style="width:0%"></div></div><div class="prog-pct" id="ppEmail">0%</div></div>
+        <div class="prog-row"><div class="prog-lbl">AI keywords</div><div class="prog-track"><div class="prog-fill pf-blue" id="pfAI" style="width:0%"></div></div><div class="prog-pct" id="ppAI">0</div></div>
+        <div style="margin-top:20px;">
+          <div style="font-size:9px;letter-spacing:2px;color:var(--text3);text-transform:uppercase;margin-bottom:10px;font-weight:700;">Keywords in queue</div>
+          <div class="kw-chips" id="kwChips"><span style="color:var(--text3);font-size:11px;">None yet</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">Live Activity</div>
+        <div class="act-feed" id="actFeed"><div class="empty-st"><span class="empty-ico">&#128225;</span>Waiting for activity...</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ ANALYTICS ═══ -->
+  <section class="section" id="sec-analytics">
+    <div class="stats-grid">
+      <div class="stat-card c-accent"><div class="stat-label">Total Leads</div><div class="stat-val" id="an-l">0</div><div class="stat-sub">collected</div></div>
+      <div class="stat-card c-green"><div class="stat-label">Emails Sent</div><div class="stat-val" id="an-e">0</div><div class="stat-sub">outreach done</div></div>
+      <div class="stat-card c-blue"><div class="stat-label">Categories</div><div class="stat-val" id="an-c">&mdash;</div><div class="stat-sub">unique genres</div></div>
+      <div class="stat-card c-amber"><div class="stat-label">Avg Rating</div><div class="stat-val" id="an-s">&mdash;</div><div class="stat-sub">Play Store score</div></div>
+    </div>
+
+    <div style="margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding:0 2px;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="font-size:18px;font-weight:700;color:var(--accent2);">&#128231; Email Analytics</span>
+        <span id="anEmailTotal" style="font-family:var(--mono);font-size:10px;color:var(--text3);"></span>
+      </div>
+      <button class="btn-ghost" onclick="refreshEmailAnalytics()" style="padding:7px 16px;font-size:10px;">&#128260; Refresh</button>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card c-green"><div class="stat-label">&#128232; Sent</div><div class="stat-val" id="anSent">0</div><div class="stat-sub">total sent</div></div>
+      <div class="stat-card c-cyan"><div class="stat-label">&#128065; Opened</div><div class="stat-val" id="anOpened">0</div><div class="stat-sub">unique opens</div></div>
+      <div class="stat-card c-amber"><div class="stat-label">&#9203; Pending</div><div class="stat-val" id="anPending">0</div><div class="stat-sub">unopened</div></div>
+      <div class="stat-card c-red"><div class="stat-label">&#10060; Bounced</div><div class="stat-val" id="anBounced">0</div><div class="stat-sub">returned</div></div>
+      <div class="stat-card c-red"><div class="stat-label">&#128465; Spam</div><div class="stat-val" id="anSpam">0</div><div class="stat-sub">reported</div></div>
+      <div class="stat-card c-red"><div class="stat-label">&#9888; Failed</div><div class="stat-val" id="anFailed">0</div><div class="stat-sub">send errors</div></div>
+      <div class="stat-card c-pink"><div class="stat-label">&#128276; Unsubscribed</div><div class="stat-val" id="anUnsub">0</div><div class="stat-sub">opted out</div></div>
+    </div>
+
+    <div class="grid-2" style="margin-bottom:14px;">
+      <div class="card">
+        <div class="card-head">Conversion Funnel</div>
+        <div class="funnel">
+          <div class="fn-step"><div class="fn-lbl">Scraped</div><div class="fn-bar-wrap"><div class="fn-bar" id="fn1" style="width:100%;background:linear-gradient(90deg,var(--accent),var(--accent2))">0</div></div><div class="fn-cnt" id="fn1c">0</div></div>
+          <div class="fn-step"><div class="fn-lbl">Has Email</div><div class="fn-bar-wrap"><div class="fn-bar" id="fn2" style="width:0%;background:linear-gradient(90deg,#2563eb,var(--blue))">0</div></div><div class="fn-cnt" id="fn2c">0</div></div>
+          <div class="fn-step"><div class="fn-lbl">Email Sent</div><div class="fn-bar-wrap"><div class="fn-bar" id="fn3" style="width:0%;background:linear-gradient(90deg,#059669,var(--green))">0</div></div><div class="fn-cnt" id="fn3c">0</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">Top Categories</div>
+        <div id="catBreak"><div class="empty-st" style="padding:24px;font-size:11px;">No data yet</div></div>
+      </div>
+    </div>
+
+    <!-- Email Log with Filters -->
+    <div class="card" style="margin-bottom:18px;">
+      <div class="card-head" style="justify-content:space-between;">
+        <span>&#128203; Email Log</span>
+        <span id="anLogCount" style="font-size:10px;color:var(--text3);font-family:var(--mono);">0 results</span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px;padding:16px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);">
+        <div>
+          <div class="hf-label" style="margin-bottom:5px;">Status</div>
+          <select class="hf-input" id="anFilterStatus" onchange="applyAnalyticsFilters()">
+            <option value="all">All</option>
+            <option value="sent">Sent</option>
+            <option value="opened">Opened</option>
+            <option value="failed">Failed</option>
+            <option value="bounced">Bounced</option>
+            <option value="spam">Spam</option>
+            <option value="unsubscribed">Unsubscribed</option>
+          </select>
+        </div>
+        <div>
+          <div class="hf-label" style="margin-bottom:5px;">From</div>
+          <input class="hf-input" id="anFilterFrom" type="date"/>
+        </div>
+        <div>
+          <div class="hf-label" style="margin-bottom:5px;">To</div>
+          <input class="hf-input" id="anFilterTo" type="date"/>
+        </div>
+        <div>
+          <div class="hf-label" style="margin-bottom:5px;">Keyword</div>
+          <input class="hf-input" id="anFilterKeyword" type="text" placeholder="any"/>
+        </div>
+        <div>
+          <div class="hf-label" style="margin-bottom:5px;">Category</div>
+          <input class="hf-input" id="anFilterCategory" type="text" placeholder="any"/>
+        </div>
+        <div>
+          <div class="hf-label" style="margin-bottom:5px;">Search</div>
+          <input class="hf-input" id="anFilterSearch" type="text" placeholder="name / email / subject"/>
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:6px;">
+          <button class="btn-primary" onclick="applyAnalyticsFilters()" style="padding:9px 18px;font-size:11px;">&#128269; Apply</button>
+          <button class="btn-clear" onclick="resetAnalyticsFilters()" style="padding:9px 16px;font-size:10px;">&#8634; Reset</button>
+          <button class="btn-ghost" onclick="exportAnalyticsCSV()" style="padding:9px 16px;font-size:10px;">&#128229; CSV</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>#</th><th>App Name</th><th>Email</th><th>Subject</th>
+            <th>Status</th><th>Sent At</th><th>Opened At</th><th>Detail</th>
+          </tr></thead>
+          <tbody id="anLogBody"><tr><td colspan="8"><div class="empty-st"><span class="empty-ico">&#128231;</span>No email data yet. Send some emails first!</div></td></tr></tbody>
+        </table>
+      </div>
+
+      <div id="anPagination" style="display:flex;align-items:center;justify-content:center;gap:6px;margin-top:16px;flex-wrap:wrap;"></div>
+    </div>
+
+    <div class="grid-3">
+      <div class="card">
+        <div class="card-head">Install Distribution</div>
+        <div id="installBreak"><div class="empty-st" style="padding:18px;font-size:11px;">&mdash;</div></div>
+      </div>
+      <div class="card">
+        <div class="card-head">Keyword Performance</div>
+        <div id="kwPerf"><div class="empty-st" style="padding:18px;font-size:11px;">&mdash;</div></div>
+      </div>
+      <div class="card">
+        <div class="card-head">Session Summary</div>
+        <div style="font-size:11px;color:var(--text3);line-height:2.6;padding:4px 0;">
+          Start time: <span id="ss-start" style="color:var(--text2)">&mdash;</span><br>
+          Duration: <span id="ss-dur" style="color:var(--text2)">&mdash;</span><br>
+          Phase: <span id="ss-phase" style="color:var(--accent2)">&mdash;</span><br>
+          AI calls: <span id="ss-ai" style="color:var(--blue)">0</span><br>
+          Sheet: <span id="ss-sheet" style="color:var(--green)">&mdash;</span><br>
+          Status: <span id="ss-st" style="color:var(--text2)">Idle</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ DATABASE ═══ -->
+  <section class="section" id="sec-database">
+    <div class="card">
+      <div class="card-head" style="justify-content:space-between;">
+        <span>All Leads &nbsp;<span id="dbCnt" style="color:var(--accent2);font-size:20px;letter-spacing:0;font-weight:800">0</span></span>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <span id="sheetLinkWrap"></span>
+          <button class="btn-clear" onclick="clearHistory()">&#128465; Clear History</button>
+          <button class="btn-ghost" onclick="exportCSV()">&#11015; Export CSV</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>#</th><th>App Name</th><th>Developer</th><th>Email</th>
+            <th>Category</th><th>Installs</th><th>Score</th>
+            <th>Keyword</th><th>Status</th><th>Link</th>
+          </tr></thead>
+          <tbody id="dbBody"><tr><td colspan="10"><div class="empty-st"><span class="empty-ico">&#128451;</span>No leads yet.</div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ SPAM TEST ═══ -->
+  <section class="section" id="sec-spamtest">
+    <div class="spam-card">
+      <div class="card-head">&#129514; Spam Test &mdash; Email Preview</div>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:20px;line-height:1.8;">
+        Send a test email to your inbox to check if it lands in Primary or Spam. AI generates a unique email using your template.
+      </p>
+      <div class="form-row" style="margin-bottom:16px;">
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label">Your Test Email</label>
+          <input class="form-input" id="spamTestEmail" type="email" placeholder="yourname@gmail.com"/>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label">Sample App Name</label>
+          <input class="form-input" id="spamSampleApp" type="text" placeholder="MyApp Pro"/>
+        </div>
+      </div>
+      <div class="form-row" style="margin-bottom:20px;">
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label">Sample Developer</label>
+          <input class="form-input" id="spamSampleDev" type="text" placeholder="John Dev"/>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label">Sample Rating</label>
+          <input class="form-input" id="spamSampleScore" type="number" step="0.1" placeholder="2.1" value="2.1"/>
+        </div>
+      </div>
+      <button class="btn-primary" onclick="runSpamTest()" id="btnSpamTest">&#128228; Send Test Email</button>
+      <div id="spamResult" class="spam-result"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">Email Template Preview (sample data)</div>
+      <div style="font-size:11px;color:var(--text3);margin-bottom:14px;">AI will rewrite this uniquely per lead &mdash; this is just the base structure:</div>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:18px;">
+        <div style="font-size:10px;color:var(--accent2);font-family:var(--mono);margin-bottom:10px;">Subject: <span id="liveSubject" style="color:var(--text2);">&mdash;</span></div>
+        <pre id="liveBody" style="font-size:11.5px;color:var(--text2);white-space:pre-wrap;font-family:var(--mono);line-height:1.8;">&mdash;</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ SETUP ═══ -->
+  <section class="section" id="sec-setup">
+    <div class="setup-grid">
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="card">
+          <div class="card-head">API Credentials</div>
+          <div class="form-group">
+            <label class="form-label">Groq API Key</label>
+            <div class="pass-wrap">
+              <input class="form-input" id="cfg-groq" type="password" placeholder="gsk_..."/>
+              <button class="pass-toggle" onclick="togglePass('cfg-groq',this)">&#128065;</button>
+            </div>
+            <div class="form-hint">From <strong style="color:var(--accent2)">console.groq.com</strong> &mdash; free tier available. Used for AI keywords AND AI email writing.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Target Leads</label>
+            <input class="form-input" id="cfg-target" type="number" placeholder="300" value="300" min="10" max="2000"/>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">Sender Identity</div>
+          <div class="form-row">
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">Your Name</label>
+              <input class="form-input" id="cfg-sender-name" type="text" placeholder="Your Name"/>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">Your Company</label>
+              <input class="form-input" id="cfg-sender-company" type="text" placeholder="Your Company"/>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">Email Template (AI Base)</div>
+          <div style="font-size:10px;color:var(--text3);margin-bottom:12px;line-height:1.8;">
+            AI uses this template's <strong style="color:var(--accent2)">value proposition</strong> to write a unique subject + body for each lead.
+            The better your template, the better the AI output.
+          </div>
+          <div class="form-group">
+            <label class="form-label">Subject Line Template</label>
+            <input class="form-input" id="cfg-email-subject" type="text" placeholder="Quick question about {{app_name}}"/>
+          </div>
+          <div style="font-size:10px;color:var(--text3);margin-bottom:10px;">
+            Variables:
+            <code style="background:var(--bg);padding:2px 6px;border-radius:4px;color:var(--accent2)">{{app_name}}</code>
+            <code style="background:var(--bg);padding:2px 6px;border-radius:4px;color:var(--accent2)">{{developer}}</code>
+            <code style="background:var(--bg);padding:2px 6px;border-radius:4px;color:var(--accent2)">{{category}}</code>
+            <code style="background:var(--bg);padding:2px 6px;border-radius:4px;color:var(--accent2)">{{score}}</code>
+            <code style="background:var(--bg);padding:2px 6px;border-radius:4px;color:var(--accent2)">{{installs}}</code>
+            <code style="background:var(--bg);padding:2px 6px;border-radius:4px;color:var(--accent2)">{{sender_name}}</code>
+            <code style="background:var(--bg);padding:2px 6px;border-radius:4px;color:var(--accent2)">{{sender_company}}</code>
+            <code style="background:var(--bg);padding:2px 6px;border-radius:4px;color:var(--accent2)">{{unsubscribe_url}}</code> &mdash; auto-added at bottom
+          </div>
+          <div class="form-group">
+            <label class="form-label">Email Body Template</label>
+            <textarea class="form-input" id="cfg-email-body" rows="10" oninput="updateLivePreview()"></textarea>
+          </div>
+          <button class="btn-ghost" onclick="resetTemplate()">&#8634; Reset to default</button>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="keepalive-card">
+          <div class="card-head">&#9889; Keep-Alive (Anti-Sleep)</div>
+          <div style="font-size:11px;color:var(--text2);margin-bottom:16px;line-height:1.9;">
+            Render free plan puts the server to sleep after 15 min. Enter your <strong style="color:var(--accent2)">deployed app URL</strong> below &mdash; this page will auto-ping to keep it awake.
+          </div>
+          <div class="ka-row">
+            <div class="form-group" style="flex:1;margin-bottom:0;">
+              <label class="form-label">Your App URL</label>
+              <input class="form-input" id="cfg-keepalive-url" type="url" placeholder="https://your-app.onrender.com"/>
+            </div>
+            <div class="form-group" style="min-width:130px;margin-bottom:0;">
+              <label class="form-label">Interval (seconds)</label>
+              <input class="form-input" id="cfg-keepalive-interval" type="number" placeholder="25" value="25" min="10" max="60"/>
+            </div>
+          </div>
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn-primary" onclick="startKeepAlive()" id="btnKaStart" style="font-size:11.5px;padding:10px 22px;">&#9654; Start Keep-Alive</button>
+            <button class="btn-clear" onclick="stopKeepAlive()" id="btnKaStop" style="display:none;padding:10px 18px;">&#9209; Stop</button>
+          </div>
+          <div class="ka-status off" id="kaStatus" style="margin-top:12px;">Keep-Alive: OFF &mdash; server may sleep after 15 minutes</div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">Google Sheet Database</div>
+          <div class="form-group">
+            <label class="form-label">Google Sheet URL</label>
+            <input class="form-input" id="cfg-sheeturl" type="url" placeholder="https://docs.google.com/spreadsheets/d/..."/>
+            <div id="sheetLinkRowSetup" style="margin-top:10px;"></div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Lead Sheet Apps Script URL</label>
+            <input class="form-input" id="cfg-appsscript" type="url" placeholder="https://script.google.com/macros/s/.../exec"/>
+            <div class="form-hint">For writing data to the leads sheet</div>
+          </div>
+          <div class="as-box">
+            <h4>&#128203; Lead Sheet Apps Script (4 tabs auto-created)</h4>
+            <div style="font-size:10px;color:var(--text3);line-height:2;margin-bottom:12px;">
+              Tabs: <strong style="color:var(--accent2)">All Leads</strong> | <strong style="color:var(--accent2)">Qualified Leads</strong> | <strong style="color:var(--accent2)">Email Sent</strong> | <strong style="color:var(--accent2)">Keyword Log</strong>
+            </div>
+            <div class="code-block" id="asCode">function doPost(e) {
+  try {
+    var data = JSON.parse(e.postData.contents);
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var action = data.action;
+
+    if (action === "append") {
+      var tab = data.tab || "All Leads";
+      var sheet = ss.getSheetByName(tab);
+      if (!sheet) sheet = ss.insertSheet(tab);
+      var row = data.row;
+      if (sheet.getLastRow() === 0) {
+        sheet.appendRow(Object.keys(row));
+      }
+      sheet.appendRow(Object.values(row));
+
+    } else if (action === "mark_sent") {
+      var allSheet = ss.getSheetByName("All Leads");
+      if (allSheet) {
+        var appId = data.app_id;
+        var vals = allSheet.getDataRange().getValues();
+        for (var i = 1; i < vals.length; i++) {
+          if (String(vals[i][vals[i].length - 1]) === appId) {
+            var sentCol = vals[0].indexOf("Email Sent") + 1;
+            if (sentCol > 0) allSheet.getRange(i+1, sentCol).setValue("Yes");
+            break;
+          }
+        }
+      }
+      var qSheet = ss.getSheetByName("Qualified Leads");
+      if (qSheet) {
+        var appId = data.app_id;
+        var vals = qSheet.getDataRange().getValues();
+        for (var i = 1; i < vals.length; i++) {
+          if (String(vals[i][vals[i].length - 1]) === appId) {
+            var sentCol = vals[0].indexOf("Email Sent") + 1;
+            if (sentCol > 0) qSheet.getRange(i+1, sentCol).setValue("Yes");
+            break;
+          }
+        }
+      }
+      var sentSheet = ss.getSheetByName("Email Sent");
+      if (!sentSheet) sentSheet = ss.insertSheet("Email Sent");
+      if (sentSheet.getLastRow() === 0) {
+        sentSheet.appendRow(["App ID","App Name","Email","Sent At"]);
+      }
+      sentSheet.appendRow([data.app_id, data.app_name||"", data.email||"", new Date().toLocaleString()]);
+
+    } else if (action === "get_pending") {
+      var allSheet = ss.getSheetByName("All Leads");
+      if (!allSheet) {
+        return ContentService
+          .createTextOutput(JSON.stringify({status:"ok", leads:[]}))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      var vals = allSheet.getDataRange().getValues();
+      if (vals.length < 2) {
+        return ContentService
+          .createTextOutput(JSON.stringify({status:"ok", leads:[]}))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      var headers = vals[0];
+      var colIdx = {};
+      headers.forEach(function(h, i) { colIdx[h] = i; });
+      var leads = [];
+      for (var i = 1; i < vals.length; i++) {
+        var row = vals[i];
+        var emailSent = String(row[colIdx["Email Sent"]] || "").trim().toLowerCase();
+        if (emailSent === "no" || emailSent === "") {
+          leads.push({
+            app_id:    String(row[colIdx["App ID"]]    || ""),
+            app_name:  String(row[colIdx["App Name"]]  || ""),
+            developer: String(row[colIdx["Developer"]] || ""),
+            email:     String(row[colIdx["Email"]]     || ""),
+            category:  String(row[colIdx["Category"]]  || ""),
+            installs:  Number(row[colIdx["Installs"]]  || 0),
+            score:     row[colIdx["Score"]] ? Number(row[colIdx["Score"]]) : null,
+            url:       String(row[colIdx["URL"]]       || ""),
+            keyword:   String(row[colIdx["Keyword"]]   || ""),
+          });
+        }
+      }
+      return ContentService
+        .createTextOutput(JSON.stringify({status:"ok", leads:leads}))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    return ContentService
+      .createTextOutput(JSON.stringify({status:"ok"}))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch(err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({status:"error",msg:err.toString()}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}</div>
+            <button class="btn-ghost" style="margin-top:12px;" onclick="copyCode('asCode')">&#128203; Copy Lead Script</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">Email Apps Script</div>
+          <div class="form-group">
+            <label class="form-label">Email Apps Script URL</label>
+            <input class="form-input" id="cfg-emailscript" type="url" placeholder="https://script.google.com/macros/s/.../exec"/>
+            <div class="form-hint">For sending emails via Gmail &mdash; deploy a separate Script</div>
+          </div>
+          <div class="as-box">
+            <h4>&#128231; Email Apps Script Code</h4>
+            <div class="code-block" id="emailCode">function doPost(e) {
+  try {
+    var data = JSON.parse(e.postData.contents);
+    var opts = {
+      htmlBody: data.html_body || data.body,
+      name: data.from_name || '',
+      replyTo: Session.getActiveUser().getEmail(),
+      headers: {
+        'List-Unsubscribe': '&lt;' + (data.unsubscribe_url || '') + '&gt;',
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+        'X-Mailer': 'Mail',
+        'Precedence': 'bulk'
+      }
+    };
+    GmailApp.sendEmail(data.to, data.subject, data.body, opts);
+    return ContentService
+      .createTextOutput(JSON.stringify({status: "ok"}))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch(err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({status:"error",msg:err.toString()}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}</div>
+            <button class="btn-ghost" style="margin-top:12px;" onclick="copyCode('emailCode')">&#128203; Copy Email Script</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px;">
+      <div class="card-head">Render Environment Variables</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:12px;">Copy these to Render &rarr; your service &rarr; Environment:</div>
+      <div class="env-block" id="envPrev">GROQ_API_KEY=...
+APPS_SCRIPT_WEB_URL=...
+EMAIL_SCRIPT_URL=...
+SENDER_NAME=...
+SENDER_COMPANY=...
+TARGET_LEADS=300</div>
+      <button class="btn-ghost" style="margin-top:12px;" onclick="copyCode('envPrev')">&#128203; Copy ENV Block</button>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+      <button class="btn-primary" onclick="saveConfig()">&#128190; Save Configuration</button>
+      <div class="saved-msg" id="savedMsg">&#9989; Saved!</div>
+    </div>
+  </section>
+</main>
+
+<!-- Email Detail Modal -->
+<div id="anModal" class="modal-overlay" onclick="if(event.target===this)closeEmailDetail()">
+  <div class="modal-box">
+    <div class="modal-head">
+      <span class="modal-title">&#128231; Email Detail</span>
+      <button class="modal-close" onclick="closeEmailDetail()">&#10005;</button>
+    </div>
+    <div id="anModalBody" style="font-size:12px;color:var(--text2);line-height:2;">Loading...</div>
+  </div>
+</div>
+
+<script>
+// ════ CONFIG ════
+const CFG_KEY = 'playlead_v6';
+let cfg = {};
+
+const DEFAULT_SUBJECT = 'Quick question about {{app_name}}';
+const DEFAULT_BODY =
+`Hi {{developer}},
+
+I came across {{app_name}} on Play Store — looks like a really interesting project.
+
+I've been following apps in the {{category}} space and had a thought about something that might be useful for {{app_name}}.
+
+Let me know if you have a few minutes to chat this week?
+
+Best,
+{{sender_name}}
+{{sender_company}}`;
+
+function loadCfg() {
+  try { cfg = JSON.parse(localStorage.getItem(CFG_KEY)||'{}'); } catch(e) { cfg={}; }
+  setVal('cfg-groq',              cfg.groq||'');
+  setVal('cfg-target',            cfg.target||300);
+  setVal('cfg-sender-name',       cfg.sender_name||'');
+  setVal('cfg-sender-company',    cfg.sender_company||'');
+  setVal('cfg-email-subject',     cfg.email_subject||DEFAULT_SUBJECT);
+  setVal('cfg-email-body',        cfg.email_body||DEFAULT_BODY);
+  setVal('cfg-sheeturl',          cfg.sheeturl||'');
+  setVal('cfg-appsscript',        cfg.appsscript||'');
+  setVal('cfg-emailscript',       cfg.emailscript||'');
+  setVal('cfg-keepalive-url',     cfg.keepalive_url||'');
+  setVal('cfg-keepalive-interval',cfg.keepalive_interval||25);
+  refreshDerived();
+  updateLivePreview();
+}
+
+function saveConfig() {
+  cfg = {
+    groq:               getVal('cfg-groq'),
+    target:             parseInt(getVal('cfg-target'))||300,
+    sender_name:        getVal('cfg-sender-name'),
+    sender_company:     getVal('cfg-sender-company'),
+    email_subject:      getVal('cfg-email-subject'),
+    email_body:         getVal('cfg-email-body'),
+    sheeturl:           getVal('cfg-sheeturl'),
+    appsscript:         getVal('cfg-appsscript'),
+    emailscript:        getVal('cfg-emailscript'),
+    keepalive_url:      getVal('cfg-keepalive-url'),
+    keepalive_interval: parseInt(getVal('cfg-keepalive-interval'))||25,
+  };
+  localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
+  const m = document.getElementById('savedMsg');
+  m.classList.add('show'); setTimeout(()=>m.classList.remove('show'), 3000);
+  refreshDerived(); checkWarn(); updateLivePreview();
+}
+
+function refreshDerived() {
+  document.getElementById('tgtNum').textContent = cfg.target||300;
+  document.getElementById('envPrev').textContent =
+    `GROQ_API_KEY=${cfg.groq||'...'}\nAPPS_SCRIPT_WEB_URL=${cfg.appsscript||'...'}\nEMAIL_SCRIPT_URL=${cfg.emailscript||'...'}\nSENDER_NAME=${cfg.sender_name||'...'}\nSENDER_COMPANY=${cfg.sender_company||'...'}\nTARGET_LEADS=${cfg.target||300}`;
+  const url = cfg.sheeturl||'';
+  const lh = url ? `<a class="sheet-link-btn" href="${esc(url)}" target="_blank">&#128202; Open Sheet &#8599;</a>` : '';
+  ['sheetLinkRowSetup','sheetLinkWrap'].forEach(id=>{ const e=document.getElementById(id); if(e) e.innerHTML=lh; });
+  document.getElementById('ss-sheet').textContent = cfg.appsscript ? 'Yes' : 'Not set';
+}
+
+function checkWarn() {
+  const bad = !cfg.groq || !cfg.emailscript || !cfg.appsscript;
+  document.getElementById('cfgWarn').classList.toggle('show', bad);
+}
+
+function resetTemplate() {
+  if(!confirm('Reset to default template?')) return;
+  setVal('cfg-email-subject', DEFAULT_SUBJECT);
+  setVal('cfg-email-body', DEFAULT_BODY);
+  updateLivePreview();
+}
+
+function togglePass(id, btn) {
+  const el = document.getElementById(id);
+  el.type = el.type==='password' ? 'text' : 'password';
+  btn.innerHTML = el.type==='password' ? '&#128065;' : '&#128064;';
+}
+
+// ════ MOBILE SIDEBAR ════
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebarOverlay').classList.toggle('open');
+}
+
+// ════ KEEP-ALIVE ════
+let kaTmr = null;
+
+function startKeepAlive() {
+  const url = getVal('cfg-keepalive-url') || cfg.keepalive_url;
+  if(!url) { alert('Enter your App URL first!'); return; }
+  const interval = (parseInt(getVal('cfg-keepalive-interval')) || 25) * 1000;
+  if(kaTmr) clearInterval(kaTmr);
+  kaTmr = setInterval(()=>doPing(url), interval);
+  doPing(url);
+  document.getElementById('btnKaStart').style.display = 'none';
+  document.getElementById('btnKaStop').style.display  = 'inline-flex';
+  setKaStatus('Pinging...', null);
+}
+
+function stopKeepAlive() {
+  if(kaTmr) { clearInterval(kaTmr); kaTmr = null; }
+  document.getElementById('btnKaStart').style.display = 'inline-flex';
+  document.getElementById('btnKaStop').style.display  = 'none';
+  setKaStatus('OFF — server may sleep after 15 minutes', false);
+  document.getElementById('pingBadge').className = 'ping-badge off';
+  document.getElementById('pingBadge').innerHTML = '&#9889; Keep-Alive: OFF';
+}
+
+async function doPing(url) {
+  try {
+    const pingUrl = url.replace(/\/$/, '') + '/api/ping';
+    const start = Date.now();
+    const r = await fetch(pingUrl, {method:'GET', cache:'no-cache'});
+    const ms = Date.now() - start;
+    if(r.ok) {
+      const kaLastPing = new Date().toLocaleTimeString();
+      const interval = parseInt(getVal('cfg-keepalive-interval'))||25;
+      setKaStatus(`Active — last ping: ${kaLastPing} (${ms}ms) | every ${interval}s`, true);
+      document.getElementById('pingBadge').className = 'ping-badge ok';
+      document.getElementById('pingBadge').innerHTML = `&#9889; Alive ${kaLastPing}`;
+    } else {
+      setKaStatus(`Ping returned ${r.status} — check URL`, false);
+      document.getElementById('pingBadge').className = 'ping-badge off';
+    }
+  } catch(e) {
+    setKaStatus(`Ping failed: ${e.message} — CORS or wrong URL`, false);
+    document.getElementById('pingBadge').className = 'ping-badge off';
+    document.getElementById('pingBadge').innerHTML = '&#9889; Ping failed';
+  }
+}
+
+function setKaStatus(msg, ok) {
+  const el = document.getElementById('kaStatus');
+  el.textContent = 'Keep-Alive: ' + msg;
+  el.className = 'ka-status ' + (ok===true?'active':ok===false?'off':'');
+}
+
+// ════ NAV ════
+const pgTitles = {
+  automation: '&#9889; <span class="hi">Automation</span>',
+  analytics:  '&#128202; <span class="hi">Analytics</span>',
+  database:   '&#128451; <span class="hi">Database</span>',
+  spamtest:   '&#129514; <span class="hi">Spam Test</span>',
+  setup:      '&#9881; <span class="hi">Setup & Config</span>',
+};
+let anPollTmr = null;
+function showSec(name, el) {
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('sec-'+name).classList.add('active');
+  el.classList.add('active');
+  document.getElementById('pgTitle').innerHTML = pgTitles[name];
+  if(name==='analytics') { renderAnalytics(); startAnPoll(); }
+  else { stopAnPoll(); }
+  if(name==='spamtest')  updateLivePreview();
+  // close mobile sidebar
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('open');
+}
+function startAnPoll() {
+  stopAnPoll();
+  refreshEmailAnalytics();
+  anPollTmr = setInterval(refreshEmailAnalytics, 5000);
+}
+function stopAnPoll() {
+  if(anPollTmr) { clearInterval(anPollTmr); anPollTmr = null; }
+}
+
+// ════ HUNTER MODE ════
+let hunterActive = false;
+function toggleHunter() {
+  hunterActive = !hunterActive;
+  document.getElementById('hunterToggle').classList.toggle('active', hunterActive);
+  document.getElementById('hunterFields').classList.toggle('show', hunterActive);
+}
+
+// ════ UPDATE PENDING BADGE ════
+async function refreshSheetPending() {
+  const sheetUrl = cfg.appsscript;
+  if (!sheetUrl) {
+    updatePendingBadge(0, false);
+    return;
+  }
+  try {
+    const r = await fetch('/api/sheet_pending', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ sheet_url: sheetUrl })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      updatePendingBadge(d.count, false);
+    }
+  } catch(e) {}
+}
+
+function updatePendingBadge(count, running) {
+  const badge = document.getElementById('pendingBadge');
+  const btn   = document.getElementById('btnSendPending');
+  badge.textContent = count;
+  if(count > 0) {
+    badge.classList.remove('zero');
+  } else {
+    badge.classList.add('zero');
+  }
+  btn.disabled = running;
+}
+
+// ════ CLEAR HISTORY ════
+async function clearHistory() {
+  if(!confirm('Clear all dashboard history — leads, logs, everything? Sheet will not be affected. Continue?')) return;
+  try {
+    const r = await fetch('/api/clear', {method:'POST'});
+    const d = await r.json();
+    if(!r.ok) { alert(d.error||'Cannot clear while running'); return; }
+    allLeads = []; lastLogLen = 0; startTime = null; aiCalls = 0;
+    renderDB([]);
+    document.getElementById('actFeed').innerHTML = '<div class="empty-st"><span class="empty-ico">&#128225;</span>Waiting for activity...</div>';
+    document.getElementById('kwChips').innerHTML = '<span style="color:var(--text3);font-size:11px;">None yet</span>';
+    ['stLeads','stEmails','stKws'].forEach(id=>setText(id,'0'));
+    document.getElementById('stRate').textContent='\u2014';
+    setBar('pfLeads','ppLeads',0,'0%'); setBar('pfEmail','ppEmail',0,'0%'); setBar('pfAI','ppAI',0,'0');
+    document.getElementById('dbCnt').textContent='0';
+    updatePendingBadge(0, false);
+    refreshSheetPending();
+    ['pp-scrape','pp-ai','pp-leads','pp-email','pp-done'].forEach(id=>{
+      const e=document.getElementById(id); if(e) e.className='pipe-step';
+    });
+    alert('History cleared!');
+  } catch(e) { alert('Error: '+e.message); }
+}
+
+// ════ AUTOMATION ════
+let pollTmr = null, lastLogLen = 0, startTime = null, allLeads = [], aiCalls = 0;
+
+async function startAuto() {
+  const kw = document.getElementById('kwInput').value.trim();
+  if(!kw) { alert('Enter a keyword first!'); return; }
+  checkWarn();
+  const hunter = hunterActive ? {
+    active: true,
+    max_installs: parseInt(document.getElementById('hf-installs').value)||5000,
+    max_score:    parseFloat(document.getElementById('hf-score').value)||2.5,
+  } : { active: false };
+
+  try {
+    const body = {
+      keyword:          kw,
+      groq_key:         cfg.groq,
+      sheet_url:        cfg.appsscript,
+      email_script_url: cfg.emailscript,
+      target:           cfg.target||300,
+      sender_name:      cfg.sender_name||'',
+      sender_company:   cfg.sender_company||'',
+      email_subject:    cfg.email_subject||DEFAULT_SUBJECT,
+      email_body:       cfg.email_body||DEFAULT_BODY,
+      hunter:           hunter,
+    };
+    const r = await fetch('/api/start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const d = await r.json();
+    if(!r.ok) { alert(d.error||'Error starting'); return; }
+    startTime = new Date(); aiCalls = 0;
+    document.getElementById('btnStart').disabled = true;
+    document.getElementById('btnStop').classList.add('show');
+    startPoll();
+  } catch(e) { alert('Cannot reach server: '+e.message); }
+}
+
+async function stopAuto() {
+  await fetch('/api/stop', {method:'POST'}).catch(()=>{});
+}
+
+async function sendPending() {
+  const sheetUrl = cfg.appsscript;
+  if (!sheetUrl) { alert('Sheet URL not set in Setup & Config!'); return; }
+
+  let pending = [];
+  try {
+    const r = await fetch('/api/sheet_pending', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ sheet_url: sheetUrl })
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) { alert('Error fetching from sheet: ' + (d.error||'unknown')); return; }
+    pending = d.leads || [];
+  } catch(e) { alert('Network error: ' + e.message); return; }
+
+  if (!pending.length) { alert('No pending leads in sheet — all already sent!'); return; }
+  if (!confirm(`Sheet has ${pending.length} pending leads. Send emails to all of them?`)) return;
+
+  try {
+    const r = await fetch('/api/send_pending', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        leads:            pending,
+        groq_key:         cfg.groq,
+        email_script_url: cfg.emailscript,
+        sheet_url:        cfg.appsscript,
+        sender_name:      cfg.sender_name||'',
+        sender_company:   cfg.sender_company||'',
+        email_subject:    cfg.email_subject||DEFAULT_SUBJECT,
+        email_body:       cfg.email_body||DEFAULT_BODY,
+      })
+    });
+    const d = await r.json();
+    if(!r.ok) { alert(d.error||'Error'); return; }
+    startPoll();
+  } catch(e) { alert('Error: '+e.message); }
+}
+
+function startPoll() {
+  if(pollTmr) clearInterval(pollTmr);
+  pollTmr = setInterval(fetchSt, 2000);
+  fetchSt();
+}
+
+async function fetchSt() {
+  try { const r = await fetch('/api/status'); const d = await r.json(); renderSt(d); } catch(e) {}
+}
+
+function renderSt(d) {
+  const running = d.running, phase = d.phase||'idle';
+  const leads = d.leads_found||0, emails = d.emails_sent||0;
+  const target = cfg.target||300;
+  const kws = d.keywords_used||[];
+  allLeads = d.leads||[];
+
+  const dot = document.getElementById('sbDot'), sl = document.getElementById('sbStatus');
+  if(running)              { dot.className='dot live';     sl.textContent='Running'; }
+  else if(phase==='done')  { dot.className='dot done-dot'; sl.textContent='Done'; }
+  else if(phase==='stopped'){ dot.className='dot err';     sl.textContent='Stopped'; }
+  else                     { dot.className='dot';          sl.textContent='Idle'; }
+
+  document.getElementById('btnStart').disabled = running;
+  document.getElementById('btnStop').classList.toggle('show', running);
+
+  document.getElementById('btnSendPending').disabled = running;
+
+  setText('stLeads', leads);
+  setText('stEmails', emails);
+  setText('stKws', kws.length);
+  setText('tgtLeadsForEmail', leads);
+  document.getElementById('stRate').textContent = leads>0 ? Math.round((emails/leads)*100)+'%' : '\u2014';
+
+  const lp = Math.min(100, Math.round((leads/target)*100));
+  const ep = leads>0 ? Math.min(100, Math.round((emails/leads)*100)) : 0;
+  const ap = Math.min(100, Math.round((kws.length-1)/4*100));
+  setBar('pfLeads','ppLeads', lp, lp+'%');
+  setBar('pfEmail','ppEmail', ep, ep+'%');
+  setBar('pfAI','ppAI', ap, Math.max(0,kws.length-1)+' kws');
+
+  renderPipeline(phase, running);
+
+  const cc = document.getElementById('kwChips');
+  cc.innerHTML = kws.length
+    ? kws.map((k,i)=>`<div class="kw-chip"><span class="kw-idx">#${i+1}</span>${esc(k)}</div>`).join('')
+    : '<span style="color:var(--text3);font-size:11px;">None yet</span>';
+
+  const logs = d.logs||[];
+  if(logs.length!==lastLogLen) { lastLogLen=logs.length; renderFeed(logs); }
+
+  setText('an-l', leads); setText('an-e', emails);
+  const cats = [...new Set(allLeads.map(l=>l.category).filter(Boolean))];
+  document.getElementById('an-c').textContent = cats.length||'\u2014';
+  const sc = allLeads.map(l=>l.score).filter(x=>x!==null&&x!==undefined);
+  document.getElementById('an-s').textContent = sc.length ? (sc.reduce((a,b)=>a+b,0)/sc.length).toFixed(1) : '\u2014';
+
+  if(startTime) {
+    document.getElementById('ss-start').textContent = startTime.toLocaleTimeString();
+    document.getElementById('ss-dur').textContent = fmtDur(Math.floor((Date.now()-startTime)/1000));
+  }
+  document.getElementById('ss-phase').textContent = phase;
+  document.getElementById('ss-ai').textContent = Math.max(0,kws.length-1)*5;
+  document.getElementById('ss-st').textContent = running?'Running':phase==='done'?'Done':'Stopped';
+
+  renderDB(allLeads);
+
+  if(!running && (phase==='done'||phase==='stopped'||phase==='idle')) {
+    document.getElementById('btnStart').disabled = false;
+    document.getElementById('btnStop').classList.remove('show');
+    if(pollTmr) { clearInterval(pollTmr); pollTmr=null; }
+  }
+}
+
+function renderPipeline(phase, running) {
+  const all = ['pp-scrape','pp-ai','pp-leads','pp-email','pp-done'];
+  all.forEach(id=>{ const e=document.getElementById(id); if(e) e.className='pipe-step'; });
+  if(phase==='done') { all.forEach(id=>{ const e=document.getElementById(id); if(e) e.classList.add('p-done'); }); return; }
+  const map = {scraping:'pp-scrape', ai_keywords:'pp-ai', emailing:'pp-email'};
+  if(running && map[phase]) {
+    const activeId = map[phase];
+    document.getElementById(activeId).classList.add('p-active');
+    const order = ['pp-scrape','pp-ai','pp-leads','pp-email','pp-done'];
+    const idx = order.indexOf(activeId);
+    for(let i=0;i<idx;i++) { const e=document.getElementById(order[i]); if(e) e.classList.add('p-done'); }
+    if(phase==='emailing') { const e=document.getElementById('pp-leads'); if(e) e.classList.add('p-done'); }
+  }
+}
+
+function renderFeed(logs) {
+  const feed = document.getElementById('actFeed');
+  if(!logs.length) { feed.innerHTML='<div class="empty-st"><span class="empty-ico">&#128225;</span>Waiting for activity...</div>'; return; }
+  feed.innerHTML = [...logs].reverse().slice(0,100).map(l=>`
+    <div class="act-item">
+      <span class="act-time">${l.time}</span>
+      <span class="act-msg">${esc(l.msg)}</span>
+    </div>`).join('');
+}
+
+// ════ DATABASE ════
+function renderDB(leads) {
+  document.getElementById('dbCnt').textContent = leads.length;
+  refreshDerived();
+  const tbody = document.getElementById('dbBody');
+  if(!leads.length) { tbody.innerHTML=`<tr><td colspan="10"><div class="empty-st"><span class="empty-ico">&#128451;</span>No leads yet.</div></td></tr>`; return; }
+  tbody.innerHTML = leads.map((l,i)=>`
+    <tr>
+      <td style="color:var(--text3);font-family:var(--mono);font-size:10px">${i+1}</td>
+      <td><div style="font-weight:600;color:var(--text);max-width:150px;overflow:hidden;text-overflow:ellipsis">${esc(l.app_name||'')}</div></td>
+      <td style="color:var(--text2);font-size:10.5px;max-width:110px;overflow:hidden;text-overflow:ellipsis">${esc(l.developer||'')}</td>
+      <td><a class="email-a" href="mailto:${esc(l.email)}">${esc(l.email)}</a></td>
+      <td><span class="bdg bdg-cat">${esc(l.category||'\u2014')}</span></td>
+      <td style="font-family:var(--mono);font-size:10.5px">${(l.installs||0).toLocaleString()}</td>
+      <td style="font-family:var(--mono);font-size:10.5px">${l.score!=null?Number(l.score).toFixed(1):'new'}</td>
+      <td style="color:var(--accent2);font-size:10.5px">${esc(l.keyword||'')}</td>
+      <td>${l.email_sent?'<span class="bdg bdg-sent">&#10003; Sent</span>':'<span class="bdg bdg-pend">Pending</span>'}</td>
+      <td><a class="ext-a" href="${esc(l.url)}" target="_blank">&#8599;</a></td>
+    </tr>`).join('');
+}
+
+// ════ ANALYTICS ════
+function renderAnalytics() {
+  const leads = allLeads;
+  if(!leads.length) return;
+  const total=leads.length, withEmail=leads.filter(l=>l.email).length, sent=leads.filter(l=>l.email_sent).length;
+  setText('fn1',total); setText('fn1c',total);
+  const p2=total>0?Math.round((withEmail/total)*100):0;
+  document.getElementById('fn2').style.width=p2+'%'; setText('fn2',withEmail); setText('fn2c',withEmail);
+  const p3=withEmail>0?Math.round((sent/withEmail)*100):0;
+  document.getElementById('fn3').style.width=p3+'%'; setText('fn3',sent); setText('fn3c',sent);
+  const catMap={};
+  leads.forEach(l=>{ if(l.category) catMap[l.category]=(catMap[l.category]||0)+1; });
+  const catS=Object.entries(catMap).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  const cMax=catS[0]?catS[0][1]:1;
+  document.getElementById('catBreak').innerHTML=catS.map(([c,n])=>`
+    <div class="prog-row" style="margin-bottom:10px;">
+      <div class="prog-lbl" style="font-size:10px;min-width:100px;overflow:hidden;text-overflow:ellipsis">${esc(c)}</div>
+      <div class="prog-track"><div class="prog-fill pf-accent" style="width:${Math.round((n/cMax)*100)}%"></div></div>
+      <div class="prog-pct">${n}</div>
+    </div>`).join('')||'<div class="empty-st" style="padding:14px">No data</div>';
+  const ir={'0-1K':0,'1K-5K':0,'5K+':0};
+  leads.forEach(l=>{ const i=l.installs||0; if(i<1000)ir['0-1K']++; else if(i<=5000)ir['1K-5K']++; else ir['5K+']++; });
+  document.getElementById('installBreak').innerHTML=Object.entries(ir).map(([k,v])=>`
+    <div class="prog-row" style="margin-bottom:10px;">
+      <div class="prog-lbl" style="font-size:10px;min-width:60px">${k}</div>
+      <div class="prog-track"><div class="prog-fill pf-blue" style="width:${total>0?Math.round((v/total)*100):0}%"></div></div>
+      <div class="prog-pct">${v}</div>
+    </div>`).join('');
+  const kwM={};
+  leads.forEach(l=>{ if(l.keyword) kwM[l.keyword]=(kwM[l.keyword]||0)+1; });
+  const kwS=Object.entries(kwM).sort((a,b)=>b[1]-a[1]);
+  const kwMax=kwS[0]?kwS[0][1]:1;
+  document.getElementById('kwPerf').innerHTML=kwS.map(([k,v])=>`
+    <div class="prog-row" style="margin-bottom:8px;">
+      <div class="prog-lbl" style="font-size:10px;min-width:80px;overflow:hidden;text-overflow:ellipsis">${esc(k)}</div>
+      <div class="prog-track"><div class="prog-fill pf-amber" style="width:${Math.round((v/kwMax)*100)}%"></div></div>
+      <div class="prog-pct">${v}</div>
+    </div>`).join('')||'<div style="color:var(--text3);font-size:11px;padding:8px">&mdash;</div>';
+
+  refreshEmailAnalytics();
+}
+
+// ════ EMAIL ANALYTICS (SQLite) ════
+let anCurrentPage = 1;
+let anCurrentTid = null;
+
+async function refreshEmailAnalytics() {
+  await fetchAnalyticsOverview();
+  await fetchEmailLogs(anCurrentPage);
+}
+
+async function fetchAnalyticsOverview() {
+  try {
+    const r = await fetch('/api/analytics/overview');
+    const d = await r.json();
+    if(d.ok && d.data) {
+      setText('anSent', d.data.sent);
+      setText('anOpened', d.data.opened);
+      setText('anPending', d.data.pending_open);
+      setText('anBounced', d.data.bounced);
+      setText('anSpam', d.data.spam);
+      setText('anFailed', d.data.failed);
+      setText('anUnsub', d.data.unsubscribed);
+      const total = parseInt(d.data.total)||0;
+      document.getElementById('anEmailTotal').textContent = total + ' tracked';
+    }
+  } catch(e) {}
+}
+
+async function fetchEmailLogs(page) {
+  anCurrentPage = page || 1;
+  const status = getVal('anFilterStatus') || 'all';
+  const from = getVal('anFilterFrom') || '';
+  const to = getVal('anFilterTo') || '';
+  const keyword = getVal('anFilterKeyword') || '';
+  const cat = getVal('anFilterCategory') || '';
+  const q = getVal('anFilterSearch') || '';
+
+  const params = new URLSearchParams({
+    page: anCurrentPage, limit: 50,
+    status, keyword, category: cat, q,
+    date_from: from, date_to: to
+  });
+
+  try {
+    const r = await fetch('/api/analytics/logs?' + params);
+    const d = await r.json();
+    if(d.ok) renderEmailLogs(d);
+  } catch(e) {}
+}
+
+function renderEmailLogs(d) {
+  const rows = d.data || [];
+  const tbody = document.getElementById('anLogBody');
+  document.getElementById('anLogCount').textContent = d.total + ' results';
+
+  if(!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="8"><div class="empty-st"><span class="empty-ico">&#128231;</span>No email data yet.</div></td></tr>';
+    document.getElementById('anPagination').innerHTML = '';
+    return;
+  }
+
+  tbody.innerHTML = rows.map((r,i) => `
+    <tr style="cursor:pointer;" onclick="showEmailDetail('${esc(r.tracking_id)}')">
+      <td style="color:var(--text3);font-family:var(--mono);font-size:10px;">${(anCurrentPage-1)*50 + i + 1}</td>
+      <td><div style="max-width:130px;overflow:hidden;text-overflow:ellipsis;font-weight:500;">${esc(r.app_name||'')}</div></td>
+      <td><span style="font-family:var(--mono);font-size:10px;color:var(--accent2);">${esc(r.email||'')}</span></td>
+      <td><div style="max-width:150px;overflow:hidden;text-overflow:ellipsis;color:var(--text2);">${esc(r.subject||'')}</div></td>
+      <td>${emailStatusBadge(r.status, r.unsubscribed)}</td>
+      <td style="font-family:var(--mono);font-size:10px;color:var(--text3);">${r.sent_at ? r.sent_at.split(' ')[1] : '\u2014'}</td>
+      <td style="font-family:var(--mono);font-size:10px;color:var(--text3);">${r.opened_at ? r.opened_at.split(' ')[1] : '\u2014'}</td>
+      <td><span style="color:var(--cyan);font-size:12px;cursor:pointer;">&#128065;</span></td>
+    </tr>`).join('');
+
+  renderAnPagination(d.total, d.page, d.limit);
+}
+
+function emailStatusBadge(status, unsubscribed) {
+  if(unsubscribed) return '<span class="bdg" style="background:rgba(244,114,182,.08);color:var(--pink);border:1px solid rgba(244,114,182,.2);">Unsubscribed</span>';
+  const map = {
+    'sent': '<span class="bdg bdg-sent">Sent</span>',
+    'opened': '<span class="bdg" style="background:rgba(34,211,238,.08);color:var(--cyan);border:1px solid rgba(34,211,238,.2);">Opened</span>',
+    'delivered': '<span class="bdg bdg-sent">Delivered</span>',
+    'failed': '<span class="bdg" style="background:rgba(248,113,113,.08);color:var(--red);border:1px solid rgba(248,113,113,.2);">Failed</span>',
+    'bounced': '<span class="bdg" style="background:rgba(251,146,60,.08);color:#fb923c;border:1px solid rgba(251,146,60,.2);">Bounced</span>',
+    'spam': '<span class="bdg" style="background:rgba(239,68,68,.08);color:#ef4444;border:1px solid rgba(239,68,68,.2);">Spam</span>',
+  };
+  return map[status] || '<span class="bdg bdg-pend">'+esc(status)+'</span>';
+}
+
+function renderAnPagination(total, page, limit) {
+  const pages = Math.ceil(total / limit);
+  const el = document.getElementById('anPagination');
+  if(pages <= 1) { el.innerHTML = ''; return; }
+  let html = '';
+  if(page > 1) html += '<button class="btn-ghost" onclick="fetchEmailLogs('+(page-1)+')" style="padding:6px 12px;font-size:10px;">&#8249; Prev</button>';
+  for(let p = Math.max(1, page-2); p <= Math.min(pages, page+2); p++) {
+    html += `<button class="${p===page?'btn-primary':'btn-ghost'}" onclick="fetchEmailLogs(${p})" style="padding:6px 12px;font-size:10px;">${p}</button>`;
+  }
+  if(page < pages) html += '<button class="btn-ghost" onclick="fetchEmailLogs('+(page+1)+')" style="padding:6px 12px;font-size:10px;">Next &#8250;</button>';
+  el.innerHTML = html;
+}
+
+function applyAnalyticsFilters() { fetchEmailLogs(1); }
+function resetAnalyticsFilters() {
+  ['anFilterStatus','anFilterFrom','anFilterTo','anFilterKeyword','anFilterCategory','anFilterSearch'].forEach(id=>{
+    const e=document.getElementById(id); if(e) e.value = id==='anFilterStatus'?'all':'';
+  });
+  fetchEmailLogs(1);
+}
+
+async function showEmailDetail(tid) {
+  anCurrentTid = tid;
+  const modal = document.getElementById('anModal');
+  modal.style.display = 'flex';
+  document.getElementById('anModalBody').innerHTML = '<div style="text-align:center;padding:32px;">Loading...</div>';
+
+  try {
+    const r = await fetch('/api/analytics/email/' + encodeURIComponent(tid));
+    const d = await r.json();
+    if(d.ok && d.data) renderEmailDetail(d.data);
+    else document.getElementById('anModalBody').innerHTML = '<div style="color:var(--red);padding:22px;">Error loading detail.</div>';
+  } catch(e) {
+    document.getElementById('anModalBody').innerHTML = '<div style="color:var(--red);padding:22px;">Network error.</div>';
+  }
+}
+
+function closeEmailDetail() {
+  document.getElementById('anModal').style.display = 'none';
+  anCurrentTid = null;
+}
+
+function renderEmailDetail(data) {
+  document.getElementById('anModalBody').innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+      <div><strong style="color:var(--text);">App Name:</strong><br><span style="color:var(--text2);">${esc(data.app_name||'\u2014')}</span></div>
+      <div><strong style="color:var(--text);">Email:</strong><br><span style="color:var(--accent2);font-family:var(--mono);font-size:11px;">${esc(data.email||'\u2014')}</span></div>
+      <div style="grid-column:span 2;"><strong style="color:var(--text);">Subject:</strong><br><span style="color:var(--text2);">${esc(data.subject||'\u2014')}</span></div>
+      <div><strong style="color:var(--text);">Status:</strong><br>${emailStatusBadge(data.status, data.unsubscribed)}</div>
+      <div><strong style="color:var(--text);">Category:</strong><br><span style="color:var(--blue);font-size:11px;">${esc(data.category||'\u2014')}</span></div>
+      <div><strong style="color:var(--text);">Sent At:</strong><br><span style="font-family:var(--mono);font-size:10px;color:var(--text3);">${data.sent_at||'\u2014'}</span></div>
+      <div><strong style="color:var(--text);">Opened At:</strong><br><span style="font-family:var(--mono);font-size:10px;color:var(--text3);">${data.opened_at||'Not yet opened'}</span></div>
+      <div><strong style="color:var(--text);">Opened Count:</strong><br><span style="font-family:var(--mono);font-size:12px;color:var(--cyan);">${data.opened_count||0}</span></div>
+      <div><strong style="color:var(--text);">Unsubscribed:</strong><br><span style="color:${data.unsubscribed?'var(--red)':'var(--green)'};">${data.unsubscribed?'Yes':'No'}</span></div>
+      <div><strong style="color:var(--text);">Keyword:</strong><br><span style="color:var(--accent2);font-size:11px;">${esc(data.keyword||'\u2014')}</span></div>
+      <div style="grid-column:span 2;"><strong style="color:var(--text);">Delivery Detail:</strong><br><span style="color:var(--text3);font-size:11px;">${esc(data.delivery_detail||'\u2014')}</span></div>
+    </div>
+    <div style="margin-bottom:16px;">
+      <strong style="color:var(--text);">Email Body Preview:</strong>
+      <pre style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:14px;font-size:10px;color:var(--text2);white-space:pre-wrap;max-height:240px;overflow-y:auto;margin-top:8px;font-family:var(--mono);line-height:1.7;">${esc(data.body||'\u2014')}</pre>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:16px;">
+      <span style="font-size:10px;color:var(--text3);align-self:center;">Manual Action:</span>
+      <button class="btn-ghost" onclick="updateEmailStatus('${data.tracking_id}','opened')" style="font-size:10px;">Mark Opened</button>
+      <button class="btn-ghost" onclick="updateEmailStatus('${data.tracking_id}','delivered')" style="font-size:10px;color:var(--green);">Mark Delivered</button>
+      <button class="btn-ghost" onclick="updateEmailStatus('${data.tracking_id}','bounced')" style="font-size:10px;color:var(--red);">Mark Bounced</button>
+      <button class="btn-ghost" onclick="updateEmailStatus('${data.tracking_id}','spam')" style="font-size:10px;color:var(--red);">Mark Spam</button>
+    </div>
+  `;
+}
+
+async function updateEmailStatus(tid, status) {
+  if(!tid) return;
+  try {
+    const r = await fetch('/api/analytics/update_status', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({tracking_id: tid, status})
+    });
+    const d = await r.json();
+    if(d.ok) {
+      if(anCurrentTid === tid) showEmailDetail(tid);
+      fetchEmailLogs(anCurrentPage);
+      fetchAnalyticsOverview();
+    } else alert('Error: '+(d.error||'unknown'));
+  } catch(e) { alert('Error: '+e.message); }
+}
+
+function exportAnalyticsCSV() {
+  const status = getVal('anFilterStatus') || 'all';
+  const from = getVal('anFilterFrom') || '';
+  const to = getVal('anFilterTo') || '';
+  const keyword = getVal('anFilterKeyword') || '';
+  const cat = getVal('anFilterCategory') || '';
+  const q = getVal('anFilterSearch') || '';
+  const params = new URLSearchParams({status, keyword, category: cat, q, date_from: from, date_to: to, limit: 10000, format: 'csv'});
+  window.open('/api/analytics/logs?'+params, '_blank');
+}
+
+// ════ SPAM TEST ════
+async function runSpamTest() {
+  const testEmail = document.getElementById('spamTestEmail').value.trim();
+  if(!testEmail) { alert('Enter your test email!'); return; }
+  const btn = document.getElementById('btnSpamTest');
+  btn.disabled = true; btn.textContent = 'AI writing + sending...';
+  const result = document.getElementById('spamResult');
+  result.className = 'spam-result'; result.style.display = 'none';
+  try {
+    const r = await fetch('/api/spam_test', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        test_email:       testEmail,
+        sample_app_name:  document.getElementById('spamSampleApp').value || 'MyApp Pro',
+        sample_developer: document.getElementById('spamSampleDev').value || 'John Dev',
+        sample_score:     parseFloat(document.getElementById('spamSampleScore').value)||2.1,
+        groq_key:         cfg.groq,
+        email_script_url: cfg.emailscript,
+        sender_name:      cfg.sender_name||'',
+        sender_company:   cfg.sender_company||'',
+        email_subject:    cfg.email_subject||DEFAULT_SUBJECT,
+        email_body:       cfg.email_body||DEFAULT_BODY,
+      })
+    });
+    const d = await r.json();
+    if(d.ok) {
+      result.className = 'spam-result ok';
+      result.textContent = d.msg + '\nSubject: ' + (d.subject||'') + '\n\n' + (d.body||'');
+      result.style.display = 'block';
+    } else {
+      result.className = 'spam-result err';
+      result.textContent = 'Error: ' + (d.error||'Unknown');
+      result.style.display = 'block';
+    }
+  } catch(e) {
+    result.className = 'spam-result err';
+    result.textContent = 'Network: ' + e.message;
+    result.style.display = 'block';
+  }
+  btn.disabled = false; btn.textContent = '\u2708 Send Test Email';
+}
+
+// ════ LIVE PREVIEW ════
+function fillTpl(tpl, lead) {
+  return tpl
+    .replace(/{{app_name}}/g,       lead.app_name||'')
+    .replace(/{{developer}}/g,      lead.developer||'')
+    .replace(/{{category}}/g,       lead.category||'')
+    .replace(/{{installs}}/g,       String(lead.installs||''))
+    .replace(/{{score}}/g,          String(lead.score||''))
+    .replace(/{{url}}/g,            lead.url||'')
+    .replace(/{{sender_name}}/g,    cfg.sender_name||'Your Name')
+    .replace(/{{sender_company}}/g, cfg.sender_company||'Your Company');
+}
+function updateLivePreview() {
+  const sample = {
+    app_name:'MyApp Pro', developer:'John Dev', category:'Productivity',
+    installs:1500, score:2.1, url:'https://play.google.com/store/apps/details?id=com.example',
+  };
+  const ls = document.getElementById('liveSubject');
+  const lb = document.getElementById('liveBody');
+  if(ls) ls.textContent = fillTpl(getVal('cfg-email-subject')||DEFAULT_SUBJECT, sample);
+  if(lb) lb.textContent = fillTpl(getVal('cfg-email-body')||DEFAULT_BODY, sample);
+}
+
+// ════ CSV ════
+function exportCSV() {
+  if(!allLeads.length) { alert('No leads to export.'); return; }
+  const h = ['App Name','Developer','Email','Category','Installs','Score','URL','Keyword','Scraped At','Email Sent'];
+  const rows = allLeads.map(l=>[l.app_name,l.developer,l.email,l.category,l.installs,l.score,l.url,l.keyword,l.scraped_at,l.email_sent]
+    .map(v=>'"'+String(v||'').replace(/"/g,'""')+'"'));
+  const csv = [h,...rows].map(r=>r.join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
+  a.download = 'playleads_'+Date.now()+'.csv'; a.click();
+}
+
+// ════ COPY ════
+function copyCode(id) {
+  navigator.clipboard.writeText(document.getElementById(id).textContent)
+    .then(()=>alert('Copied to clipboard!'));
+}
+
+// ════ UTILS ════
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function setText(id,v) { const e=document.getElementById(id); if(e) e.textContent=v; }
+function setBar(fId,pId,pct,lbl) { document.getElementById(fId).style.width=pct+'%'; document.getElementById(pId).textContent=lbl; }
+function getVal(id) { const e=document.getElementById(id); return e ? e.value.trim() : ''; }
+function setVal(id,v) { const e=document.getElementById(id); if(e) e.value=v; }
+function fmtDur(s) { return Math.floor(s/60)+'m '+s%60+'s'; }
+
+// ════ CLOCK ════
+setInterval(()=>{ document.getElementById('clk').textContent=new Date().toLocaleTimeString(); }, 1000);
+
+// ════ INIT ════
+window.addEventListener('load', ()=>{
+  loadCfg(); checkWarn(); fetchSt(); startPoll();
+  refreshSheetPending();
+  setInterval(refreshSheetPending, 30000);
+});
+</script>
+</body>
+</html>
