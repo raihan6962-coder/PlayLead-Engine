@@ -1,0 +1,76 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Users can only access their own data
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Settings - user-specific
+    match /settings/{docId} {
+      allow read, write: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+    }
+
+    // Keywords - user-specific
+    match /keywords/{docId} {
+      allow read, write: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+    }
+
+    // Keyword runs
+    match /keyword_runs/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Leads - authenticated access
+    match /leads/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Lead events
+    match /lead_events/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Email templates
+    match /email_templates/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Outreach messages
+    match /outreach_messages/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Sending accounts
+    match /sending_accounts/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Replies
+    match /replies/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Notifications
+    match /notifications/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Activity logs
+    match /activity_logs/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Analytics daily
+    match /analytics_daily/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // System state (automation)
+    match /system/{docId} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
