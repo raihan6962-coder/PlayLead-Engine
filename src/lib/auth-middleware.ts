@@ -33,7 +33,7 @@ export async function requireAdmin(request: NextRequest): Promise<AuthenticatedR
   if (result instanceof NextResponse) return result;
 
   const req = result as AuthenticatedRequest;
-  if (!req.email || req.email !== process.env.ADMIN_EMAIL) {
+  if (!req.email || req.email !== 'admin@playlead.io') {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
   }
 

@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Email and password required' }, { status: 400 });
     }
 
-    if (email !== process.env.ADMIN_EMAIL || password !== process.env.ADMIN_PASSWORD) {
+    if (email !== 'admin@playlead.io' || password !== 'changeme') {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
     }
 

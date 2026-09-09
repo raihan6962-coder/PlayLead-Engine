@@ -1,4 +1,4 @@
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GROQ_API_KEY = 'YOUR_GROQ_API_KEY_HERE';
 
 interface AIResponse {
   content: string;

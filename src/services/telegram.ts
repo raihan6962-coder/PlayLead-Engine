@@ -28,62 +28,53 @@ async function sendMessage(token: string, chatId: string, message: TelegramMessa
   }
 }
 
-export async function sendAutomationStarted(keyword: string, target: number): Promise<boolean> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) return false;
+const TG_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN_HERE';
+const TG_CHAT_ID = 'YOUR_TELEGRAM_CHAT_ID_HERE';
 
-  return sendMessage(token, chatId, {
+export async function sendAutomationStarted(keyword: string, target: number): Promise<boolean> {
+  if (!TG_TOKEN || TG_TOKEN.startsWith('YOUR_')) return false;
+
+  return sendMessage(TG_TOKEN, TG_CHAT_ID, {
     text: `🚀 <b>Automation Started</b>\n\nKeyword: <code>${keyword}</code>\nTarget: ${target} qualified leads\n\nDiscovery and outreach are now running server-side.`,
   });
 }
 
 export async function sendAutomationCompleted(keyword: string, leadsFound: number, emailsSent: number): Promise<boolean> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) return false;
+  if (!TG_TOKEN || TG_TOKEN.startsWith('YOUR_')) return false;
 
-  return sendMessage(token, chatId, {
+  return sendMessage(TG_TOKEN, TG_CHAT_ID, {
     text: `✅ <b>Automation Completed</b>\n\nKeyword: <code>${keyword}</code>\nQualified leads: ${leadsFound}\nEmails sent: ${emailsSent}\n\nAll tasks finished.`,
   });
 }
 
 export async function sendAutomationFailed(keyword: string, error: string): Promise<boolean> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) return false;
+  if (!TG_TOKEN || TG_TOKEN.startsWith('YOUR_')) return false;
 
-  return sendMessage(token, chatId, {
+  return sendMessage(TG_TOKEN, TG_CHAT_ID, {
     text: `❌ <b>Automation Failed</b>\n\nKeyword: <code>${keyword}</code>\nError: ${error}\n\nPlease check the dashboard for details.`,
   });
 }
 
 export async function sendOverdueAlert(keyword: string, phase: string, expectedEnd: string): Promise<boolean> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) return false;
+  if (!TG_TOKEN || TG_TOKEN.startsWith('YOUR_')) return false;
 
-  return sendMessage(token, chatId, {
+  return sendMessage(TG_TOKEN, TG_CHAT_ID, {
     text: `⚠️ <b>Expected End Time Exceeded</b>\n\nKeyword: <code>${keyword}</code>\nPhase: ${phase}\nExpected end: ${expectedEnd}\n\nThe job has NOT been stopped and will continue until its completion condition is reached.`,
   });
 }
 
 export async function sendReplyReceived(developerEmail: string, appName: string): Promise<boolean> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) return false;
+  if (!TG_TOKEN || TG_TOKEN.startsWith('YOUR_')) return false;
 
-  return sendMessage(token, chatId, {
+  return sendMessage(TG_TOKEN, TG_CHAT_ID, {
     text: `📬 <b>Reply Received</b>\n\nFrom: <code>${developerEmail}</code>\nApp: ${appName}\n\nCheck the dashboard for details.`,
   });
 }
 
 export async function sendTargetReached(keyword: string, target: number, actual: number): Promise<boolean> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) return false;
+  if (!TG_TOKEN || TG_TOKEN.startsWith('YOUR_')) return false;
 
-  return sendMessage(token, chatId, {
+  return sendMessage(TG_TOKEN, TG_CHAT_ID, {
     text: `🎯 <b>Target Reached</b>\n\nKeyword: <code>${keyword}</code>\nTarget: ${target}\nActual: ${actual}\n\nOutreach is now starting.`,
   });
 }
@@ -94,25 +85,21 @@ export async function sendDailySummary(data: {
   emailsSent: number;
   replies: number;
 }): Promise<boolean> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) return false;
+  if (!TG_TOKEN || TG_TOKEN.startsWith('YOUR_')) return false;
 
-  return sendMessage(token, chatId, {
+  return sendMessage(TG_TOKEN, TG_CHAT_ID, {
     text: `📊 <b>Daily Summary</b>\n\nKeywords processed: ${data.keywordsProcessed}\nLeads found: ${data.leadsFound}\nEmails sent: ${data.emailsSent}\nReplies: ${data.replies}`,
   });
 }
 
 export async function testConnection(): Promise<boolean> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) return false;
+  if (!TG_TOKEN || TG_TOKEN.startsWith('YOUR_')) return false;
 
-  return sendMessage(token, chatId, {
+  return sendMessage(TG_TOKEN, TG_CHAT_ID, {
     text: `✅ <b>PlayLead Bot Connected</b>\n\nTelegram integration is working correctly.`,
   });
 }
 
 export function isConfigured(): boolean {
-  return !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID);
+  return !!(TG_TOKEN && !TG_TOKEN.startsWith('YOUR_') && TG_CHAT_ID && !TG_CHAT_ID.startsWith('YOUR_'));
 }

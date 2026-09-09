@@ -1,3 +1,12 @@
+// Hardcoded config — no .env needed
+export const CONFIG = {
+  GOOGLE_SHEET_ID: 'YOUR_GOOGLE_SHEET_ID_HERE',
+  GOOGLE_APPS_SCRIPT_URL: 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE',
+  SENDER_NAME: 'Raihan',
+  SENDER_COMPANY: 'PlayLead',
+  BASE_URL: 'https://playleadbot.vercel.app',
+} as const;
+
 // Firestore Collection Names
 export const COLLECTIONS = {
   USERS: 'users',
